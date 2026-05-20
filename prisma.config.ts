@@ -11,6 +11,7 @@ export default defineConfig({
   },
   engine: "classic",
   datasource: {
-    url: env("DATABASE_URL"),
+    // Migrate / db push memakai direct connection (port 5432)
+    url: env("DIRECT_URL"),
   },
 });

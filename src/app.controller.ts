@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Public } from './common/decorators/public.decorator';
 import { PrismaService } from './prisma/prisma.service';
 import { SupabaseService } from './supabase/supabase.service';
 
@@ -11,27 +12,31 @@ export class AppController {
     private readonly configService: ConfigService,
   ) {}
 
+  @Public()
   @Get('health')
   async health() {
-    // Cek koneksi Prisma
     let prismaStatus = 'ok';
     try {
       await this.prisma.$queryRaw`SELECT 1`;
     } catch (e) {
-      prismaStatus = e.message;
+      prismaStatus = e instanceof Error ? e.message : 'error';
     }
 
-    // Cek koneksi Supabase
     const { error } = await this.supabaseService
       .getClient()
-      .from('_supabase_migrations')
-      .select('count')
+      .from('teacher_profiles')
+      .select('id')
       .limit(1);
 
+    const supabaseStatus =
+      error && error.code !== 'PGRST116' && error.code !== '42P01'
+        ? error.message
+        : 'connected';
+
     return {
-      status: prismaStatus === 'ok' && !error ? 'ok' : 'degraded',
+      status: prismaStatus === 'ok' ? 'ok' : 'degraded',
       prisma: prismaStatus,
-      supabase: error ? error.message : 'connected',
+      supabase: supabaseStatus,
       env: this.configService.get<string>('app.nodeEnv'),
       timestamp: new Date().toISOString(),
     };
