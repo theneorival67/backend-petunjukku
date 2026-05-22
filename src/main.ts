@@ -3,8 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { loadEnvFile } from './load-env';
+import { assertDatabaseEnv } from './config/validate-database-env';
 
 loadEnvFile();
+assertDatabaseEnv();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);

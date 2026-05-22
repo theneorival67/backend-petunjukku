@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { CreateTeacherProfileDto } from './dto/create-teacher-profile.dto';
@@ -46,6 +47,7 @@ export class TeacherProfileService {
 
   async upsert(user: AuthUser, dto: CreateTeacherProfileDto) {
     const schoolId = await this.resolveSchoolId(dto.schoolId, dto.schoolName);
+    const context = dto.context as Prisma.InputJsonValue | undefined;
 
     return this.prisma.teacherProfile.upsert({
       where: { userId: user.id },
@@ -53,10 +55,12 @@ export class TeacherProfileService {
         userId: user.id,
         fullName: dto.fullName.trim(),
         schoolId,
+        context,
       },
       update: {
         fullName: dto.fullName.trim(),
         schoolId,
+        ...(context !== undefined ? { context } : {}),
       },
       include: { school: true },
     });
@@ -70,13 +74,20 @@ export class TeacherProfileService {
       throw new NotFoundException('Profil guru belum dibuat');
     }
 
-    const data: { fullName?: string; schoolId?: string | null } = {};
+    const data: {
+      fullName?: string;
+      schoolId?: string | null;
+      context?: Prisma.InputJsonValue;
+    } = {};
     if (dto.fullName !== undefined) {
       data.fullName = dto.fullName.trim();
     }
     if (dto.schoolId !== undefined || dto.schoolName !== undefined) {
       data.schoolId =
         (await this.resolveSchoolId(dto.schoolId, dto.schoolName)) ?? null;
+    }
+    if (dto.context !== undefined) {
+      data.context = dto.context as Prisma.InputJsonValue;
     }
 
     return this.prisma.teacherProfile.update({

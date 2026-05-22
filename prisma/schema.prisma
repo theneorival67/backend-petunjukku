@@ -20,6 +20,7 @@ model TeacherProfile {
   userId    String   @unique @map("user_id")
   fullName  String   @map("full_name")
   schoolId  String?  @map("school_id")
+  context   Json?    @map("context")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

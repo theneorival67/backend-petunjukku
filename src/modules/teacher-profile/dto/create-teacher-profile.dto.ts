@@ -1,4 +1,11 @@
-import { IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import {
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class CreateTeacherProfileDto {
   @IsString()
@@ -16,4 +23,9 @@ export class CreateTeacherProfileDto {
   @MinLength(2)
   @MaxLength(200)
   schoolName?: string;
+
+  /** Konteks onboarding (identitas, percakapan, dll.) */
+  @IsOptional()
+  @IsObject()
+  context?: Record<string, unknown>;
 }
