@@ -1,9 +1,11 @@
 import { Controller, Get } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from './common/decorators/public.decorator';
 import { PrismaService } from './prisma/prisma.service';
 import { SupabaseService } from './supabase/supabase.service';
 
+@ApiTags('health')
 @Controller()
 export class AppController {
   constructor(
@@ -13,6 +15,7 @@ export class AppController {
   ) {}
 
   @Public()
+  @ApiOperation({ summary: 'Cek status API, database, dan Supabase' })
   @Get('health')
   async health() {
     let prismaStatus = 'ok';

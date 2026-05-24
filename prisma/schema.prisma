@@ -67,3 +67,57 @@ model Workspace {
 
   @@map("workspaces")
 }
+
+enum UserRole {
+  teacher
+  admin
+}
+
+enum SchoolLevel {
+  SD
+  SMP
+  SMA
+  SMK
+}
+
+enum SchoolType {
+  negeri
+  swasta
+}
+
+enum RppType {
+  intrakurikuler
+  pjbl_kokurikuler
+}
+
+enum RppStatus {
+  draft
+  in_progress
+  generated
+  completed
+  archived
+}
+
+enum ChatRole {
+  user
+  assistant
+  system
+}
+
+enum DocumentType {
+  capaian_pembelajaran
+  panduan_kurikulum
+  modul_ajar
+  lainnya
+}
+
+enum GenerationStatus {
+  success
+  failed
+  regenerated
+}
+
+enum ExportFileType {
+  pdf
+  docx
+}
