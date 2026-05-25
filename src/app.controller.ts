@@ -26,7 +26,7 @@ export class AppController {
     }
 
     const { error } = await this.supabaseService
-      .getClient()
+      .getAdminClient()
       .from('teacher_profiles')
       .select('id')
       .limit(1);

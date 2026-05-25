@@ -1,9 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -17,6 +20,52 @@ export class CreateTeacherProfileDto {
   @MinLength(2)
   @MaxLength(120)
   fullName: string;
+
+  @ApiPropertyOptional({
+    example: '081234567890',
+    maxLength: 30,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  phone?: string;
+
+  @ApiPropertyOptional({
+    example: 'Guru Matematika',
+    maxLength: 120,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  position?: string;
+
+  @ApiPropertyOptional({
+    example: 'S1 Pendidikan Matematika',
+    maxLength: 120,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  educationLevel?: string;
+
+  @ApiPropertyOptional({
+    example: 5,
+    minimum: 0,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  teachingExperienceYears?: number;
+
+  @ApiPropertyOptional({
+    example: 'Senang membuat pembelajaran yang kontekstual dan aktif.',
+    maxLength: 1000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  bio?: string;
 
   @ApiPropertyOptional({
     example: '0f7e4e6a-4e1d-4c6f-b4f6-6d7e3a4d9a11',

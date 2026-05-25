@@ -9,63 +9,164 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
+model User {
+  id       String   @id @db.Uuid
+  name     String?
+  email    String   @unique
+  role     UserRole @default(teacher)
+  isActive Boolean  @default(true) @map("is_active")
 
-model TeacherProfile {
-  id        String   @id @default(uuid())
-  userId    String   @unique @map("user_id")
-  fullName  String   @map("full_name")
-  schoolId  String?  @map("school_id")
-  context   Json?    @map("context")
+  teacherProfile TeacherProfile?
+  rppProjects    RppProject[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  school    School?  @relation(fields: [schoolId], references: [id])
-
-  @@map("teacher_profiles")
+  @@map("users")
 }
 
 model School {
-  id        String   @id @default(uuid())
-  name      String
-  address   String?
+  id       String  @id @default(uuid()) @db.Uuid
+  name     String
+  npsn     String?
+  province String?
+  city     String?
+  district String?
+  address  String?
+
+  schoolLevel SchoolLevel? @map("school_level")
+  schoolType  SchoolType?  @map("school_type")
+
+  schoolEnvironment   String? @map("school_environment")
+  availableFacilities Json?   @map("available_facilities")
+  internetAccess      String? @map("internet_access")
+  localContext        String? @map("local_context")
+
+  teacherProfiles TeacherProfile[]
+  rppProjects     RppProject[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
-
-  teachers  TeacherProfile[]
 
   @@map("schools")
 }
 
-model Rpp {
-  id          String   @id @default(uuid())
-  title       String
-  subject     String
-  grade       String
-  teacherId   String   @map("teacher_id")
-  workspaceId String   @map("workspace_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+model TeacherProfile {
+  id       String  @id @default(uuid()) @db.Uuid
+  userId   String  @unique @map("user_id") @db.Uuid
+  schoolId String? @map("school_id") @db.Uuid
 
-  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  fullName                String  @map("full_name")
+  phone                   String?
+  position                String?
+  educationLevel          String? @map("education_level")
+  teachingExperienceYears Int?    @map("teaching_experience_years")
+  bio                     String?
+  onboardingCompleted     Boolean @default(false) @map("onboarding_completed")
 
-  @@map("rpps")
-}
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school School? @relation(fields: [schoolId], references: [id], onDelete: SetNull)
 
-model Workspace {
-  id        String   @id @default(uuid())
-  name      String
-  ownerId   String   @map("owner_id")
+  subjects    TeacherSubject[]
+  classes     TeacherClass[]
+  rppProjects RppProject[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  rpps      Rpp[]
+  @@map("teacher_profiles")
+}
 
-  @@map("workspaces")
+model TeacherSubject {
+  id               String @id @default(uuid()) @db.Uuid
+  teacherProfileId String @map("teacher_profile_id") @db.Uuid
+
+  subjectName String  @map("subject_name")
+  phase       String?
+  gradeLevel  String? @map("grade_level")
+
+  teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  rppProjects    RppProject[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("teacher_subjects")
+}
+
+model TeacherClass {
+  id               String @id @default(uuid()) @db.Uuid
+  teacherProfileId String @map("teacher_profile_id") @db.Uuid
+
+  className    String  @map("class_name")
+  gradeLevel   String  @map("grade_level")
+  academicYear String? @map("academic_year")
+  studentCount Int?    @map("student_count")
+
+  studentCharacteristics String? @map("student_characteristics")
+  learningChallenges     Json?   @map("learning_challenges")
+  dominantLearningStyle  String? @map("dominant_learning_style")
+
+  teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  rppProjects    RppProject[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("teacher_classes")
+}
+
+model RppProject {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId           String  @map("user_id") @db.Uuid
+  teacherProfileId String  @map("teacher_profile_id") @db.Uuid
+  schoolId         String? @map("school_id") @db.Uuid
+  teacherSubjectId String? @map("teacher_subject_id") @db.Uuid
+  teacherClassId   String? @map("teacher_class_id") @db.Uuid
+
+  title      String
+  rppType    RppType   @map("rpp_type")
+  subject    String
+  phase      String?
+  gradeLevel String?   @map("grade_level")
+  status     RppStatus @default(draft)
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teacherProfile TeacherProfile  @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  school         School?         @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  teacherSubject TeacherSubject? @relation(fields: [teacherSubjectId], references: [id], onDelete: SetNull)
+  teacherClass   TeacherClass?   @relation(fields: [teacherClassId], references: [id], onDelete: SetNull)
+
+  stages RppStage[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("rpp_projects")
+}
+
+model RppStage {
+  id           String @id @default(uuid()) @db.Uuid
+  rppProjectId String @map("rpp_project_id") @db.Uuid
+
+  stageNumber Int     @map("stage_number")
+  stageName   String  @map("stage_name")
+  contentJson Json?   @map("content_json")
+  isCompleted Boolean @default(false) @map("is_completed")
+
+  rppProject RppProject @relation(fields: [rppProjectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([rppProjectId, stageNumber])
+  @@map("rpp_stages")
 }
 
 enum UserRole {

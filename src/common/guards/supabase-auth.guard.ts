@@ -22,11 +22,15 @@ export class SupabaseAuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
+
     if (isPublic) {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest<Request & { user?: AuthUser }>();
+    const request = context
+      .switchToHttp()
+      .getRequest<Request & { user?: AuthUser }>();
+
     const authHeader = request.headers.authorization;
     const token = authHeader?.startsWith('Bearer ')
       ? authHeader.slice(7)
@@ -47,6 +51,10 @@ export class SupabaseAuthGuard implements CanActivate {
     request.user = {
       id: data.user.id,
       email: data.user.email,
+      name:
+        data.user.user_metadata?.full_name ||
+        data.user.user_metadata?.name ||
+        data.user.email?.split('@')[0],
     };
 
     return true;

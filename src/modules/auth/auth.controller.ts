@@ -1,15 +1,14 @@
 import { Controller, Get } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AuthService } from './auth.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 
-@ApiTags('auth')
-@ApiBearerAuth('supabase')
 @Controller('auth')
 export class AuthController {
-  @ApiOperation({ summary: 'Ambil user dari Supabase access token' })
+  constructor(private readonly authService: AuthService) {}
+
   @Get('me')
-  me(@CurrentUser() user: AuthUser) {
-    return { user };
+  async me(@CurrentUser() user: AuthUser) {
+    return this.authService.getMe(user);
   }
 }

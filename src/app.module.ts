@@ -18,13 +18,20 @@ import { TeacherProfileModule } from './modules/teacher-profile/teacher-profile.
 import { RppModule } from './modules/rpp/rpp.module';
 import { StageModule } from './modules/stage/stage.module';
 import { WorkspaceModule } from './modules/workspace/workspace.module';
+import { UsersModule } from './modules/users/users.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [appConfig, corsConfig, supabaseConfig, databaseConfig, storageConfig],
+      load: [
+        appConfig,
+        corsConfig,
+        supabaseConfig,
+        databaseConfig,
+        storageConfig,
+      ],
     }),
     PrismaModule,
     SupabaseModule,
@@ -34,6 +41,7 @@ import { WorkspaceModule } from './modules/workspace/workspace.module';
     RppModule,
     StageModule,
     WorkspaceModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [
