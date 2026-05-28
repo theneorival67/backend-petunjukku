@@ -40,11 +40,7 @@ export const databaseConfig = registerAs('database', () => ({
   directUrl: process.env.DIRECT_URL,
 }));
 
-// export const aiConfig = registerAs('ai', () => ({
-//   openaiApiKey: process.env.OPENAI_API_KEY,
-//   model: process.env.AI_MODEL ?? 'gpt-4o',
-//   maxTokens: parseInt(process.env.AI_MAX_TOKENS ?? '2048', 10),
-// }));
+// Lihat ./ai.config.ts (OpenCode Go)
 
 export const jwtConfig = registerAs('jwt', () => ({
   secret: process.env.JWT_SECRET,

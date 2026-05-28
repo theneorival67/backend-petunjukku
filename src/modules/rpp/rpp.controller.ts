@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
@@ -20,8 +29,11 @@ export class RppController {
 
   @ApiOperation({ summary: 'Ambil semua project RPP milik user login' })
   @Get()
-  findMine(@CurrentUser() user: AuthUser) {
-    return this.rppService.findMine(user);
+  findMine(
+    @CurrentUser() user: AuthUser,
+    @Query('archived') archived?: string,
+  ) {
+    return this.rppService.findMine(user, archived === 'true');
   }
 
   @ApiOperation({ summary: 'Ambil detail project RPP' })
@@ -41,8 +53,14 @@ export class RppController {
   }
 
   @ApiOperation({ summary: 'Arsipkan project RPP' })
-  @Delete(':id')
+  @Post(':id/archive')
   archive(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.rppService.archive(user, id);
+  }
+
+  @ApiOperation({ summary: 'Hapus permanen project RPP' })
+  @Delete(':id')
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.rppService.remove(user, id);
   }
 }

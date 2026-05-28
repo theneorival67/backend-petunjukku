@@ -31,13 +31,16 @@ model User {
 }
 
 model School {
-  id       String  @id @default(uuid()) @db.Uuid
-  name     String
-  npsn     String?
-  province String?
-  city     String?
-  district String?
-  address  String?
+  id            String  @id @default(uuid()) @db.Uuid
+  name          String
+  npsn          String?
+  province      String?
+  city          String?
+  district      String?
+  address       String?
+  googlePlaceId String? @map("google_place_id")
+  latitude      Float?
+  longitude     Float?
 
   schoolLevel SchoolLevel? @map("school_level")
   schoolType  SchoolType?  @map("school_type")
@@ -49,11 +52,37 @@ model School {
 
   teacherProfiles TeacherProfile[]
   rppProjects     RppProject[]
+  environmentScans SchoolEnvironmentScan[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("schools")
+}
+
+model SchoolEnvironmentScan {
+  id String @id @default(uuid()) @db.Uuid
+
+  schoolId String? @map("school_id") @db.Uuid
+  cacheKey String  @unique @map("cache_key")
+
+  latitude     Float
+  longitude    Float
+  radiusMeters Int   @map("radius_meters")
+  payload      Json
+  source       String
+
+  fetchedAt DateTime @map("fetched_at")
+  expiresAt DateTime @map("expires_at")
+
+  school School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([schoolId])
+  @@index([expiresAt])
+  @@map("school_environment_scans")
 }
 
 model TeacherProfile {
@@ -67,6 +96,8 @@ model TeacherProfile {
   educationLevel          String? @map("education_level")
   teachingExperienceYears Int?    @map("teaching_experience_years")
   bio                     String?
+  /** Identitas + percakapan onboarding (JSON) — sumber tunggal konteks mengajar */
+  teachingContext         Json?   @map("teaching_context")
   onboardingCompleted     Boolean @default(false) @map("onboarding_completed")
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -130,12 +161,17 @@ model RppProject {
   teacherSubjectId String? @map("teacher_subject_id") @db.Uuid
   teacherClassId   String? @map("teacher_class_id") @db.Uuid
 
-  title      String
-  rppType    RppType   @map("rpp_type")
-  subject    String
-  phase      String?
-  gradeLevel String?   @map("grade_level")
-  status     RppStatus @default(draft)
+  title           String
+  rppType         RppType   @map("rpp_type")
+  subject         String
+  phase           String?
+  gradeLevel      String?   @map("grade_level")
+  topic           String?
+  totalJp         Int?      @map("total_jp")
+  meetingCount    Int?      @map("meeting_count")
+  semester        String?
+  classConditions String?   @map("class_conditions")
+  status          RppStatus @default(draft)
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   teacherProfile TeacherProfile  @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
