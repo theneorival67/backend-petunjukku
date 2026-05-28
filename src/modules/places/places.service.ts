@@ -355,6 +355,7 @@ export class PlacesService {
       schoolLongitude: input.longitude,
       radiusMeters: input.radiusMeters,
       source: curated.usedAi ? 'google_places_opencode_go' : 'google_places',
+      risks: this.assessEnvironmentRisks(rawPlaces, curated.places),
     };
     const fetchedAt = new Date();
     const expiresAt = new Date(
@@ -414,7 +415,8 @@ export class PlacesService {
       typeof record.schoolLatitude !== 'number' ||
       typeof record.schoolLongitude !== 'number' ||
       typeof record.radiusMeters !== 'number' ||
-      typeof record.source !== 'string'
+      typeof record.source !== 'string' ||
+      !Array.isArray(record.risks)
     ) {
       return null;
     }
@@ -426,7 +428,105 @@ export class PlacesService {
       schoolLongitude: record.schoolLongitude,
       radiusMeters: record.radiusMeters,
       source: record.source,
+      risks: record.risks as EnvironmentScanDto['risks'],
     };
+  }
+
+  private assessEnvironmentRisks(
+    rawPlaces: RawNearbyPlace[],
+    curatedPlaces: EnvironmentScanDto['places'],
+  ): EnvironmentScanDto['risks'] {
+    const nearRaw = rawPlaces.filter((place) =>
+      curatedPlaces.some((curated) => curated.id === place.id),
+    );
+
+    const commercial = nearRaw.filter((place) =>
+      this.hasAnyPlaceSignal(place, [
+        'market',
+        'shopping_mall',
+        'store',
+        'supermarket',
+        'restaurant',
+        'cafe',
+        'meal_takeaway',
+      ]),
+    );
+    const transit = rawPlaces.filter((place) =>
+      this.hasAnyPlaceSignal(place, [
+        'bus_stop',
+        'transit_station',
+        'train_station',
+        'parking',
+        'parking_lot',
+      ]),
+    );
+    const health = rawPlaces.filter((place) =>
+      this.hasAnyPlaceSignal(place, [
+        'hospital',
+        'doctor',
+        'pharmacy',
+        'health',
+      ]),
+    );
+
+    const risks: EnvironmentScanDto['risks'] = [];
+
+    if (commercial.length >= 3) {
+      risks.push({
+        id: 'keramaian-komersial',
+        title: 'Keramaian sekitar sekolah',
+        level: commercial.length >= 5 ? 'SEDANG' : 'RENDAH',
+        description:
+          'Terdapat beberapa titik ekonomi/layanan sangat dekat dengan sekolah. Atur rute dan waktu observasi agar siswa tidak mengganggu aktivitas warga atau pelaku usaha.',
+        evidence: commercial.slice(0, 3).map((place) => place.name),
+      });
+    }
+
+    if (transit.length > 0) {
+      risks.push({
+        id: 'akses-transportasi',
+        title: 'Akses dan pergerakan kendaraan',
+        level: transit.length >= 3 ? 'SEDANG' : 'RENDAH',
+        description:
+          'Ada sinyal titik transportasi/parkir di sekitar sekolah. Verifikasi kepadatan aktual terutama pada jam masuk, pulang, atau saat kegiatan lapangan.',
+        evidence: transit.slice(0, 3).map((place) => place.name),
+      });
+    }
+
+    if (health.length > 0) {
+      risks.push({
+        id: 'akses-kesehatan',
+        title: 'Akses fasilitas kesehatan',
+        level: 'RENDAH',
+        description:
+          'Terdapat fasilitas kesehatan terdeteksi di sekitar lokasi. Catat sebagai dukungan mitigasi bila kegiatan belajar dilakukan di luar kelas.',
+        evidence: health.slice(0, 3).map((place) => place.name),
+      });
+    }
+
+    if (risks.length === 0) {
+      risks.push({
+        id: 'verifikasi-lapangan',
+        title: 'Verifikasi lapangan',
+        level: 'RENDAH',
+        description:
+          'Tidak ada sinyal risiko khusus dari data Google Places dalam radius pencarian. Tetap cek cuaca, keamanan rute, dan izin lokasi sebelum kegiatan lapangan.',
+        evidence: [],
+      });
+    }
+
+    return risks.slice(0, 3);
+  }
+
+  private hasAnyPlaceSignal(place: RawNearbyPlace, signals: string[]) {
+    const haystack = [
+      place.primaryType ?? '',
+      ...place.types,
+      place.name.toLowerCase(),
+    ];
+    return signals.some((signal) =>
+      haystack.some((value) => value.toLowerCase().includes(signal)),
+    );
   }
 
   private withCacheMetadata(

@@ -34,6 +34,27 @@ export class NearbyPlaceDto {
   relevanceScore!: number;
 }
 
+export class EnvironmentRiskDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  title!: string;
+
+  @ApiProperty({
+    description: 'RENDAH | SEDANG | TINGGI',
+  })
+  level!: string;
+
+  @ApiProperty()
+  description!: string;
+
+  @ApiPropertyOptional({
+    description: 'Titik sekitar yang menjadi dasar sinyal risiko',
+  })
+  evidence?: string[];
+}
+
 export class EnvironmentScanDto {
   @ApiProperty({ type: NearbyPlaceDto, isArray: true })
   places!: NearbyPlaceDto[];
@@ -57,6 +78,9 @@ export class EnvironmentScanDto {
       'google_places | google_places_opencode_go (jika kurasi AI aktif)',
   })
   source!: string;
+
+  @ApiProperty({ type: EnvironmentRiskDto, isArray: true })
+  risks!: EnvironmentRiskDto[];
 
   @ApiPropertyOptional({
     description: 'True jika hasil dikembalikan dari cache database',
