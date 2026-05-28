@@ -21,6 +21,21 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
+## PetunjukKU API
+
+Backend NestJS untuk dashboard **petunjukKU** (port default `3001`).
+
+- **Swagger:** `http://localhost:3001/docs` (setelah `npm run start:dev`)
+- **Google Places (sekolah):** lihat [docs/places-api.md](./docs/places-api.md)
+
+### Env penting
+
+Salin `.env.example` → `.env`, lalu isi minimal `DATABASE_URL`, Supabase keys, dan untuk pencarian sekolah:
+
+```env
+GOOGLE_MAPS_API_KEY=...
+```
+
 ## Description
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.

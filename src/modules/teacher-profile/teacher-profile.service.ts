@@ -1,22 +1,33 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
+import { Prisma, type School } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
+import { PlacesService } from '../places/places.service';
 import { UsersService } from '../users/users.service';
 import { CreateTeacherProfileDto } from './dto/create-teacher-profile.dto';
 import { UpdateTeacherProfileDto } from './dto/update-teacher-profile.dto';
 
 @Injectable()
 export class TeacherProfileService {
+  private readonly logger = new Logger(TeacherProfileService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    @Inject(forwardRef(() => PlacesService))
+    private readonly placesService: PlacesService,
   ) {}
 
   async findMine(user: AuthUser) {
     await this.usersService.syncSupabaseUser(user);
 
-    const profile = await this.prisma.teacherProfile.findUnique({
+    let profile = await this.prisma.teacherProfile.findUnique({
       where: { userId: user.id },
       include: {
         school: true,
@@ -25,15 +36,136 @@ export class TeacherProfileService {
       },
     });
 
+    if (profile?.school) {
+      const synced = await this.ensureSchoolCoordinates(profile.school);
+      if (synced !== profile.school) {
+        profile = { ...profile, school: synced };
+      }
+    }
+
     return {
-      profile,
+      profile: profile ? this.mapProfileForClient(profile) : null,
       onboardingCompleted: profile?.onboardingCompleted ?? false,
+    };
+  }
+
+  private hasSchoolCoordinates(school: School): boolean {
+    return (
+      typeof school.latitude === 'number' &&
+      typeof school.longitude === 'number'
+    );
+  }
+
+  /** Isi koordinat dari Google Place ID jika belum tersimpan di tabel schools. */
+  private async ensureSchoolCoordinates(school: School): Promise<School> {
+    if (this.hasSchoolCoordinates(school)) {
+      return school;
+    }
+
+    const placeId = school.googlePlaceId?.trim();
+    if (!placeId) {
+      return school;
+    }
+
+    try {
+      const details = await this.placesService.getPlaceDetails(placeId);
+      if (
+        details.latitude === undefined ||
+        details.longitude === undefined
+      ) {
+        return school;
+      }
+
+      return this.prisma.school.update({
+        where: { id: school.id },
+        data: {
+          googlePlaceId: details.placeId ?? placeId,
+          latitude: details.latitude,
+          longitude: details.longitude,
+          ...(details.address ? { address: details.address } : {}),
+          ...(details.district ? { district: details.district } : {}),
+          ...(details.city ? { city: details.city } : {}),
+          ...(details.province ? { province: details.province } : {}),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Gagal mengambil koordinat sekolah dari Google: ${error instanceof Error ? error.message : error}`,
+      );
+      return school;
+    }
+  }
+
+  private schoolMetaFromDto(dto: {
+    schoolCity?: string;
+    schoolProvince?: string;
+    schoolAddress?: string;
+    schoolDistrict?: string;
+    schoolPlaceId?: string;
+    schoolLatitude?: number;
+    schoolLongitude?: number;
+  }) {
+    const city = dto.schoolCity?.trim();
+    const province = dto.schoolProvince?.trim();
+    const address = dto.schoolAddress?.trim();
+    const district = dto.schoolDistrict?.trim();
+    const googlePlaceId = dto.schoolPlaceId?.trim();
+    const latitude = dto.schoolLatitude;
+    const longitude = dto.schoolLongitude;
+    if (
+      !city &&
+      !province &&
+      !address &&
+      !district &&
+      !googlePlaceId &&
+      latitude === undefined &&
+      longitude === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      city,
+      province,
+      address,
+      district,
+      googlePlaceId,
+      latitude,
+      longitude,
+    };
+  }
+
+  private schoolMetaUpdateData(meta: {
+    city?: string;
+    province?: string;
+    address?: string;
+    district?: string;
+    googlePlaceId?: string;
+    latitude?: number;
+    longitude?: number;
+  }) {
+    return {
+      ...(meta.city ? { city: meta.city } : {}),
+      ...(meta.province ? { province: meta.province } : {}),
+      ...(meta.address ? { address: meta.address } : {}),
+      ...(meta.district ? { district: meta.district } : {}),
+      ...(meta.googlePlaceId ? { googlePlaceId: meta.googlePlaceId } : {}),
+      ...(meta.latitude !== undefined ? { latitude: meta.latitude } : {}),
+      ...(meta.longitude !== undefined ? { longitude: meta.longitude } : {}),
     };
   }
 
   private async resolveSchoolId(
     schoolId?: string,
     schoolName?: string,
+    meta?: {
+      city?: string;
+      province?: string;
+      address?: string;
+      district?: string;
+      googlePlaceId?: string;
+      latitude?: number;
+      longitude?: number;
+    },
   ): Promise<string | undefined> {
     if (schoolId) {
       const school = await this.prisma.school.findUnique({
@@ -62,11 +194,29 @@ export class TeacherProfileService {
     });
 
     if (existing) {
+      if (meta) {
+        const data = this.schoolMetaUpdateData(meta);
+        if (Object.keys(data).length > 0) {
+          await this.prisma.school.update({
+            where: { id: existing.id },
+            data,
+          });
+        }
+      }
       return existing.id;
     }
 
     const created = await this.prisma.school.create({
-      data: { name },
+      data: {
+        name,
+        city: meta?.city,
+        province: meta?.province,
+        address: meta?.address,
+        district: meta?.district,
+        googlePlaceId: meta?.googlePlaceId,
+        latitude: meta?.latitude,
+        longitude: meta?.longitude,
+      },
     });
 
     return created.id;
@@ -83,6 +233,8 @@ export class TeacherProfileService {
       educationLevel?: string;
       teachingExperienceYears?: number;
       bio?: string;
+      teachingContext?: Prisma.InputJsonValue;
+      onboardingCompleted?: boolean;
       schoolId?: string | null;
     } = {};
 
@@ -110,11 +262,29 @@ export class TeacherProfileService {
       data.bio = dto.bio.trim();
     }
 
+    if (dto.context !== undefined) {
+      data.teachingContext = dto.context as Prisma.InputJsonValue;
+      data.onboardingCompleted = true;
+    }
+
     if (schoolId !== undefined) {
       data.schoolId = schoolId;
     }
 
     return data;
+  }
+
+  private mapProfileForClient<
+    T extends {
+      teachingContext?: unknown;
+      [key: string]: unknown;
+    },
+  >(profile: T): T & { context: unknown } {
+    const { teachingContext, ...rest } = profile;
+    return {
+      ...rest,
+      context: teachingContext ?? null,
+    } as T & { context: unknown };
   }
 
   private getFallbackFullName(user: AuthUser): string {
@@ -124,7 +294,12 @@ export class TeacherProfileService {
   async upsert(user: AuthUser, dto: CreateTeacherProfileDto) {
     await this.usersService.syncSupabaseUser(user);
 
-    const schoolId = await this.resolveSchoolId(dto.schoolId, dto.schoolName);
+    const schoolMeta = this.schoolMetaFromDto(dto);
+    const schoolId = await this.resolveSchoolId(
+      dto.schoolId,
+      dto.schoolName,
+      schoolMeta,
+    );
     const profileData = this.buildProfileData(dto, schoolId);
 
     const profile = await this.prisma.teacherProfile.upsert({
@@ -144,7 +319,7 @@ export class TeacherProfileService {
 
     return {
       message: 'Profil guru berhasil disimpan.',
-      profile,
+      profile: this.mapProfileForClient(profile),
       onboardingCompleted: profile.onboardingCompleted,
     };
   }
@@ -158,9 +333,24 @@ export class TeacherProfileService {
 
     let schoolId: string | null | undefined;
 
-    if (dto.schoolId !== undefined || dto.schoolName !== undefined) {
+    if (
+      dto.schoolId !== undefined ||
+      dto.schoolName !== undefined ||
+      dto.schoolCity !== undefined ||
+      dto.schoolProvince !== undefined ||
+      dto.schoolAddress !== undefined ||
+      dto.schoolDistrict !== undefined ||
+      dto.schoolPlaceId !== undefined ||
+      dto.schoolLatitude !== undefined ||
+      dto.schoolLongitude !== undefined
+    ) {
+      const schoolMeta = this.schoolMetaFromDto(dto);
       schoolId =
-        (await this.resolveSchoolId(dto.schoolId, dto.schoolName)) ?? null;
+        (await this.resolveSchoolId(
+          dto.schoolId,
+          dto.schoolName,
+          schoolMeta,
+        )) ?? null;
     }
 
     const data = this.buildProfileData(dto, schoolId);
@@ -181,7 +371,7 @@ export class TeacherProfileService {
 
       return {
         message: 'Profil guru berhasil dibuat.',
-        profile,
+        profile: this.mapProfileForClient(profile),
         onboardingCompleted: profile.onboardingCompleted,
       };
     }
@@ -198,7 +388,7 @@ export class TeacherProfileService {
 
     return {
       message: 'Profil guru berhasil diperbarui.',
-      profile,
+      profile: this.mapProfileForClient(profile),
       onboardingCompleted: profile.onboardingCompleted,
     };
   }

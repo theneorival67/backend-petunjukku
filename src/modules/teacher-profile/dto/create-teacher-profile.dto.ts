@@ -90,6 +90,65 @@ export class CreateTeacherProfileDto {
   @MaxLength(200)
   schoolName?: string;
 
+  @ApiPropertyOptional({
+    example: 'Surabaya',
+    description: 'Kota/kabupaten sekolah (dari Google Places)',
+    maxLength: 120,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  schoolCity?: string;
+
+  @ApiPropertyOptional({
+    example: 'Jawa Timur',
+    description: 'Provinsi sekolah (dari Google Places)',
+    maxLength: 120,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  schoolProvince?: string;
+
+  @ApiPropertyOptional({
+    example: 'Jl. Contoh No. 1, Surabaya',
+    description: 'Alamat lengkap sekolah (dari Google Places)',
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  schoolAddress?: string;
+
+  @ApiPropertyOptional({
+    example: 'Beji',
+    description: 'Kecamatan sekolah (dari Google Places)',
+    maxLength: 120,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  schoolDistrict?: string;
+
+  @ApiPropertyOptional({
+    description: 'Google Place ID (dari Places API)',
+    maxLength: 256,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  schoolPlaceId?: string;
+
+  @ApiPropertyOptional({ description: 'Lintang (dari Google Places)' })
+  @IsOptional()
+  @Type(() => Number)
+  schoolLatitude?: number;
+
+  @ApiPropertyOptional({ description: 'Bujur (dari Google Places)' })
+  @IsOptional()
+  @Type(() => Number)
+  schoolLongitude?: number;
+
   /** Konteks onboarding (identitas, percakapan, dll.) */
   @IsOptional()
   @IsObject()

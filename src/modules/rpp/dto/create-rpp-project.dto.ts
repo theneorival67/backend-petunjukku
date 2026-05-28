@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RppType } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
   IsEnum,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -72,4 +75,43 @@ export class CreateRppProjectDto {
   @IsString()
   @MaxLength(50)
   gradeLevel?: string;
+
+  @ApiPropertyOptional({
+    example: 'Sistem pencernaan manusia',
+    description: 'Materi / pokok bahasan',
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  topic?: string;
+
+  @ApiPropertyOptional({ example: 6, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  totalJp?: number;
+
+  @ApiPropertyOptional({ example: 3, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  meetingCount?: number;
+
+  @ApiPropertyOptional({ example: 'Semester Ganjil 2025', maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  semester?: string;
+
+  @ApiPropertyOptional({
+    example: 'Murid beragam kemampuan, proyektor tersedia',
+    maxLength: 2000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  classConditions?: string;
 }

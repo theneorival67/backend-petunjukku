@@ -3,12 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { RppStatus } from '@prisma/client';
+import { RppStatus, RppType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { UsersService } from '../users/users.service';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
+import { buildIntrakurikulerStageSeed } from './intrakurikuler-stage-seed';
 
 @Injectable()
 export class RppService {
@@ -111,6 +112,12 @@ export class RppService {
       );
     }
 
+    const stageSeed =
+      dto.rppType === RppType.intrakurikuler ||
+      dto.rppType === RppType.pjbl_kokurikuler
+        ? buildIntrakurikulerStageSeed()
+        : [];
+
     return this.prisma.rppProject.create({
       data: {
         userId: user.id,
@@ -123,26 +130,34 @@ export class RppService {
         subject,
         phase,
         gradeLevel,
+        topic: dto.topic?.trim() || undefined,
+        totalJp: dto.totalJp,
+        meetingCount: dto.meetingCount,
+        semester: dto.semester?.trim() || undefined,
+        classConditions: dto.classConditions?.trim() || undefined,
         status: RppStatus.draft,
+        ...(stageSeed.length > 0
+          ? { stages: { create: stageSeed } }
+          : {}),
       },
       include: {
         school: true,
         teacherSubject: true,
         teacherClass: true,
-        stages: true,
+        stages: {
+          orderBy: { stageNumber: 'asc' },
+        },
       },
     });
   }
 
-  async findMine(user: AuthUser) {
+  async findMine(user: AuthUser, archived = false) {
     await this.usersService.syncSupabaseUser(user);
 
     return this.prisma.rppProject.findMany({
       where: {
         userId: user.id,
-        status: {
-          not: RppStatus.archived,
-        },
+        status: archived ? RppStatus.archived : { not: RppStatus.archived },
       },
       include: {
         school: true,
@@ -208,6 +223,11 @@ export class RppService {
       subject?: string;
       phase?: string | null;
       gradeLevel?: string | null;
+      topic?: string | null;
+      totalJp?: number | null;
+      meetingCount?: number | null;
+      semester?: string | null;
+      classConditions?: string | null;
       status?: RppStatus;
       teacherSubjectId?: string | null;
       teacherClassId?: string | null;
@@ -248,6 +268,26 @@ export class RppService {
         teacherClass?.gradeLevel || teacherSubject?.gradeLevel || null;
     }
 
+    if (dto.topic !== undefined) {
+      data.topic = dto.topic?.trim() || null;
+    }
+
+    if (dto.totalJp !== undefined) {
+      data.totalJp = dto.totalJp;
+    }
+
+    if (dto.meetingCount !== undefined) {
+      data.meetingCount = dto.meetingCount;
+    }
+
+    if (dto.semester !== undefined) {
+      data.semester = dto.semester?.trim() || null;
+    }
+
+    if (dto.classConditions !== undefined) {
+      data.classConditions = dto.classConditions?.trim() || null;
+    }
+
     if (dto.status !== undefined) {
       data.status = dto.status;
     }
@@ -281,5 +321,17 @@ export class RppService {
         status: RppStatus.archived,
       },
     });
+  }
+
+  async remove(user: AuthUser, projectId: string) {
+    const existingProject = await this.findOne(user, projectId);
+
+    await this.prisma.rppProject.delete({
+      where: {
+        id: existingProject.id,
+      },
+    });
+
+    return { id: existingProject.id, deleted: true };
   }
 }

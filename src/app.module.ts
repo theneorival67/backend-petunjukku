@@ -19,6 +19,10 @@ import { RppModule } from './modules/rpp/rpp.module';
 import { StageModule } from './modules/stage/stage.module';
 import { WorkspaceModule } from './modules/workspace/workspace.module';
 import { UsersModule } from './modules/users/users.module';
+import { AiModule } from './modules/ai/ai.module';
+import { PlacesModule } from './modules/places/places.module';
+import { aiConfig } from './config/ai.config';
+import { googleMapsConfig } from './config/google-maps.config';
 
 @Module({
   imports: [
@@ -31,6 +35,8 @@ import { UsersModule } from './modules/users/users.module';
         supabaseConfig,
         databaseConfig,
         storageConfig,
+        googleMapsConfig,
+        aiConfig,
       ],
     }),
     PrismaModule,
@@ -42,6 +48,8 @@ import { UsersModule } from './modules/users/users.module';
     StageModule,
     WorkspaceModule,
     UsersModule,
+    AiModule,
+    PlacesModule,
   ],
   controllers: [AppController],
   providers: [
