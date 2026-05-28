@@ -180,6 +180,7 @@ model RppProject {
   teacherClass   TeacherClass?   @relation(fields: [teacherClassId], references: [id], onDelete: SetNull)
 
   stages RppStage[]
+  threadMessages KinaThreadMessage[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -203,6 +204,26 @@ model RppStage {
 
   @@unique([rppProjectId, stageNumber])
   @@map("rpp_stages")
+}
+
+model KinaThreadMessage {
+  id           String @id @default(uuid()) @db.Uuid
+  rppProjectId String @map("rpp_project_id") @db.Uuid
+
+  role        ChatRole
+  content     String
+  messageType String   @default("text") @map("message_type")
+  metadata    Json?
+  toolName    String?  @map("tool_name")
+  toolState   Json?    @map("tool_state")
+
+  rppProject RppProject @relation(fields: [rppProjectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([rppProjectId, createdAt])
+  @@map("kina_thread_messages")
 }
 
 enum UserRole {

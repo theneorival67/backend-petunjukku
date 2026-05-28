@@ -48,7 +48,7 @@ export type StageContentBase = {
 
 // —— Stage 1 ——
 export type Stage1Inputs = {
-  jenjang: IntrakurikulerJenjang;
+  jenjang?: IntrakurikulerJenjang | '';
   fase: string;
   kelasSemester: string;
   mataPelajaran: string;
@@ -233,7 +233,7 @@ export function emptyIntrakurikulerStageContent(
       return {
         ...base,
         inputs: {
-          jenjang: 'smp',
+          jenjang: '',
           fase: '',
           kelasSemester: '',
           mataPelajaran: '',
