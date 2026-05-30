@@ -15,10 +15,6 @@ import { TeacherSubjectService } from './teacher-subject.service';
     TeacherSubjectService,
     TeacherClassService,
   ],
-  exports: [
-    TeacherProfileService,
-    TeacherSubjectService,
-    TeacherClassService,
-  ],
+  exports: [TeacherProfileService, TeacherSubjectService, TeacherClassService],
 })
 export class TeacherProfileModule {}

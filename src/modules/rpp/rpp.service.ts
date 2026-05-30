@@ -136,9 +136,7 @@ export class RppService {
         semester: dto.semester?.trim() || undefined,
         classConditions: dto.classConditions?.trim() || undefined,
         status: RppStatus.draft,
-        ...(stageSeed.length > 0
-          ? { stages: { create: stageSeed } }
-          : {}),
+        ...(stageSeed.length > 0 ? { stages: { create: stageSeed } } : {}),
       },
       include: {
         school: true,

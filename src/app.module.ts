@@ -21,6 +21,7 @@ import { WorkspaceModule } from './modules/workspace/workspace.module';
 import { UsersModule } from './modules/users/users.module';
 import { AiModule } from './modules/ai/ai.module';
 import { PlacesModule } from './modules/places/places.module';
+import { RagModule } from './modules/rag/rag.module';
 import { aiConfig } from './config/ai.config';
 import { googleMapsConfig } from './config/google-maps.config';
 
@@ -50,6 +51,7 @@ import { googleMapsConfig } from './config/google-maps.config';
     UsersModule,
     AiModule,
     PlacesModule,
+    RagModule,
   ],
   controllers: [AppController],
   providers: [

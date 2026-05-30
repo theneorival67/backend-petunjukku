@@ -1,5 +1,10 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';

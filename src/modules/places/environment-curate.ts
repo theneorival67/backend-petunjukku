@@ -45,9 +45,7 @@ const TYPE_RULES: TypeRule[] = [
   },
   {
     test: (t) =>
-      t.some((x) =>
-        ['school', 'library', 'university', 'museum'].includes(x),
-      ),
+      t.some((x) => ['school', 'library', 'university', 'museum'].includes(x)),
     category: 'Pendidikan & budaya',
     colorKey: 'blue',
     score: 88,
@@ -82,7 +80,12 @@ const TYPE_RULES: TypeRule[] = [
   },
   {
     test: (t) =>
-      t.some((x) => x.includes('church') || x.includes('mosque') || x.includes('place_of_worship')),
+      t.some(
+        (x) =>
+          x.includes('church') ||
+          x.includes('mosque') ||
+          x.includes('place_of_worship'),
+      ),
     category: 'Keagamaan & sosial',
     colorKey: 'slate',
     score: 72,
@@ -110,9 +113,7 @@ function haversineMeters(
   const dLon = toRad(lon2 - lon1);
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) ** 2;
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * r * Math.asin(Math.sqrt(a));
 }
 
@@ -127,11 +128,11 @@ export function formatDistanceLabel(meters: number): string {
 function classifyPlace(
   types: string[],
   primaryType?: string,
-): Omit<CuratedNearbyPlace, 'id' | 'name' | 'distanceMeters' | 'distanceLabel'> {
-  const merged = [
-    primaryType?.trim() ?? '',
-    ...types,
-  ].filter(Boolean);
+): Omit<
+  CuratedNearbyPlace,
+  'id' | 'name' | 'distanceMeters' | 'distanceLabel'
+> {
+  const merged = [primaryType?.trim() ?? '', ...types].filter(Boolean);
 
   for (const rule of TYPE_RULES) {
     if (rule.test(merged, primaryType)) {

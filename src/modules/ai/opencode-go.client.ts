@@ -54,10 +54,7 @@ export class OpencodeGoClient {
     const url = `${cfg.goBaseUrl}/${apiPath}`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      cfg.requestTimeoutMs,
-    );
+    const timeout = setTimeout(() => controller.abort(), cfg.requestTimeoutMs);
 
     try {
       const body: Record<string, unknown> = {
@@ -83,9 +80,7 @@ export class OpencodeGoClient {
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        this.logger.warn(
-          `OpenCode Go ${res.status}: ${errText.slice(0, 300)}`,
-        );
+        this.logger.warn(`OpenCode Go ${res.status}: ${errText.slice(0, 300)}`);
         throw new ServiceUnavailableException(
           `OpenCode Go gagal (${res.status})`,
         );

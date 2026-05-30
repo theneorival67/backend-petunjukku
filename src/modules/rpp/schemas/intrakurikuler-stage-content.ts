@@ -241,7 +241,7 @@ export function emptyIntrakurikulerStageContent(
           alokasiJpTotal: 0,
           jumlahPertemuan: 1,
         },
-      } as Stage1ContentJson;
+      };
     case 2:
       return {
         ...base,
@@ -252,7 +252,7 @@ export function emptyIntrakurikulerStageContent(
           profilLulusan: [],
           targetHasilMurid: '',
         },
-      } as Stage2ContentJson;
+      };
     case 3:
       return {
         ...base,
@@ -262,12 +262,12 @@ export function emptyIntrakurikulerStageContent(
           ketersediaanTeknologi: '',
           produkKinerjaAkhir: [],
         },
-      } as Stage3ContentJson;
+      };
     case 4:
       return {
         ...base,
         inputs: { fokusDitentukanOleh: 'ai', pertemuan: [] },
-      } as Stage4ContentJson;
+      };
     case 5:
       return {
         ...base,
@@ -275,7 +275,7 @@ export function emptyIntrakurikulerStageContent(
         generated: {
           dokumenFinal: { status: 'draft', exportedAt: null, fileUrl: null },
         },
-      } as Stage5ContentJson;
+      };
     default:
       return base as never;
   }

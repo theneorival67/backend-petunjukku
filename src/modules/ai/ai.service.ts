@@ -56,7 +56,9 @@ export class AiService {
     const cfg = this.configService.get('ai', { infer: true })!;
 
     try {
-      const parsed = await this.opencodeGo.chatCompletionJson<{ title?: string }>({
+      const parsed = await this.opencodeGo.chatCompletionJson<{
+        title?: string;
+      }>({
         model: cfg.envModel,
         apiPath: cfg.envApiPath,
         messages: [
@@ -132,7 +134,11 @@ Aturan:
   async kinaChat(
     user: AuthUser,
     messages: KinaChatMessageDto[],
-  ): Promise<{ reply: string; model: string; source: 'opencode_go' | 'fallback' }> {
+  ): Promise<{
+    reply: string;
+    model: string;
+    source: 'opencode_go' | 'fallback';
+  }> {
     const cfg = this.configService.get('ai', { infer: true })!;
     const trimmed = messages
       .filter((m) => m.content?.trim())
@@ -156,7 +162,9 @@ Aturan:
 
     if (!this.isEnabled()) {
       return {
-        reply: this.fallbackKinaReply(trimmed[trimmed.length - 1]?.content ?? ''),
+        reply: this.fallbackKinaReply(
+          trimmed[trimmed.length - 1]?.content ?? '',
+        ),
         model: 'fallback',
         source: 'fallback',
       };
@@ -169,7 +177,7 @@ Aturan:
         messages: [
           { role: 'system', content: systemPrompt },
           ...trimmed.map((m) => ({
-            role: m.role as 'user' | 'assistant',
+            role: m.role,
             content: m.content,
           })),
         ],
@@ -187,7 +195,9 @@ Aturan:
         `KINA chat gagal: ${error instanceof Error ? error.message : error}`,
       );
       return {
-        reply: this.fallbackKinaReply(trimmed[trimmed.length - 1]?.content ?? ''),
+        reply: this.fallbackKinaReply(
+          trimmed[trimmed.length - 1]?.content ?? '',
+        ),
         model: 'fallback',
         source: 'fallback',
       };
@@ -308,8 +318,8 @@ relevanceScore 0-100.`;
     });
 
     try {
-      const parsed = await this.opencodeGo.chatCompletionJson<AiEnvironmentResponseJson>(
-        {
+      const parsed =
+        await this.opencodeGo.chatCompletionJson<AiEnvironmentResponseJson>({
           model: cfg.envModel,
           apiPath: cfg.envApiPath,
           messages: [
@@ -322,8 +332,7 @@ Data:\n${userPrompt}`,
             },
           ],
           maxTokens: Math.min(cfg.maxTokens, 1200),
-        },
-      );
+        });
 
       const merged = this.mergeAiCuration(candidates, parsed);
       if (merged.places.length === 0) {
@@ -377,8 +386,7 @@ Data:\n${userPrompt}`,
         distanceLabel: formatDistanceLabel(base.distanceMeters),
         category: row.category?.trim() || base.category,
         colorKey,
-        relevanceNote:
-          row.relevanceNote?.trim() || base.relevanceNote,
+        relevanceNote: row.relevanceNote?.trim() || base.relevanceNote,
         relevanceScore:
           typeof row.relevanceScore === 'number'
             ? Math.max(0, Math.min(100, row.relevanceScore))
@@ -401,7 +409,9 @@ Data:\n${userPrompt}`,
         ? `Belum ditemukan titik lingkungan signifikan dalam radius pencarian dari ${schoolName}.`
         : 'Belum ditemukan titik lingkungan signifikan dalam radius pencarian.';
     }
-    const label = schoolName ? `sekitar ${schoolName}` : 'sekitar lokasi sekolah';
+    const label = schoolName
+      ? `sekitar ${schoolName}`
+      : 'sekitar lokasi sekolah';
     return `Ditemukan ${places.length} titik ${label} yang dapat dipakai sebagai konteks pembelajaran.`;
   }
 }

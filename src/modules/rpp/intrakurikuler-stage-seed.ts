@@ -6,9 +6,7 @@ import {
 
 export function buildIntrakurikulerStageSeed(): Prisma.RppStageCreateWithoutRppProjectInput[] {
   return INTRAKURIKULER_STAGE_META.map((meta) => {
-    const content = emptyIntrakurikulerStageContent(
-      meta.stageNumber as 1 | 2 | 3 | 4 | 5,
-    );
+    const content = emptyIntrakurikulerStageContent(meta.stageNumber);
     return {
       stageNumber: meta.stageNumber,
       stageName: meta.stageName,

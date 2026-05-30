@@ -196,9 +196,7 @@ export class PlacesService {
 
   private parseAddressComponents(components: GoogleAddressComponent[]) {
     const find = (...types: string[]) =>
-      components.find((c) =>
-        types.some((type) => c.types?.includes(type)),
-      );
+      components.find((c) => types.some((type) => c.types?.includes(type)));
 
     const province =
       find('administrative_area_level_1')?.longText?.trim() ?? '';
@@ -606,12 +604,7 @@ export class PlacesService {
     width: number,
     height: number,
   ): string {
-    return [
-      latitude.toFixed(6),
-      longitude.toFixed(6),
-      width,
-      height,
-    ].join(':');
+    return [latitude.toFixed(6), longitude.toFixed(6), width, height].join(':');
   }
 
   private async fetchNearbyFromGoogle(

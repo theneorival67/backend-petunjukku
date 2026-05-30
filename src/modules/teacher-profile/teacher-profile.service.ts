@@ -69,10 +69,7 @@ export class TeacherProfileService {
 
     try {
       const details = await this.placesService.getPlaceDetails(placeId);
-      if (
-        details.latitude === undefined ||
-        details.longitude === undefined
-      ) {
+      if (details.latitude === undefined || details.longitude === undefined) {
         return school;
       }
 

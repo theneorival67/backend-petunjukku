@@ -14,22 +14,23 @@ export const corsConfig = registerAs('cors', () => ({
 }));
 
 export const supabaseConfig = registerAs('supabase', () => ({
-  url:
-    process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
+  url: process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
   anonKey:
     process.env.SUPABASE_ANON_KEY ??
     process.env.SUPABASE_PUBLISHABLE_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
   serviceRoleKey:
-    process.env.SUPABASE_SERVICE_ROLE_KEY ??
-    process.env.SUPABASE_SECRET_KEY,
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY,
 }));
 
 export const storageConfig = registerAs('storage', () => ({
   bucketDocuments: process.env.SUPABASE_STORAGE_BUCKET_DOCUMENTS ?? 'documents',
   bucketAvatars: process.env.SUPABASE_STORAGE_BUCKET_AVATARS ?? 'avatars',
-  maxFileSizeMb: parseInt(process.env.SUPABASE_STORAGE_MAX_FILE_SIZE_MB ?? '10', 10),
+  maxFileSizeMb: parseInt(
+    process.env.SUPABASE_STORAGE_MAX_FILE_SIZE_MB ?? '10',
+    10,
+  ),
   get maxFileSizeBytes() {
     return this.maxFileSizeMb * 1024 * 1024;
   },

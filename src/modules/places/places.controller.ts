@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Get,
-  Header,
-  Query,
-  StreamableFile,
-} from '@nestjs/common';
+import { Controller, Get, Header, Query, StreamableFile } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,

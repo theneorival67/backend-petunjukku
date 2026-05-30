@@ -10,9 +10,11 @@ export class SupabaseService {
   constructor(private readonly configService: ConfigService) {
     const url = this.configService.getOrThrow<string>('supabase.url');
     const anonKey = this.configService.getOrThrow<string>('supabase.anonKey');
-    const serviceRoleKey = this.configService.getOrThrow<string>('supabase.serviceRoleKey');
+    const serviceRoleKey = this.configService.getOrThrow<string>(
+      'supabase.serviceRoleKey',
+    );
 
-    // Client biasa 
+    // Client biasa
     this.client = createClient(url, anonKey);
 
     // Admin client — bypass RLS, hanya untuk internal server logic

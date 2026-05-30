@@ -32,6 +32,10 @@ export const aiConfig = registerAs('ai', () => {
       process.env.AI_REQUEST_TIMEOUT_MS ?? '60000',
       10,
     ),
+    ragBaseUrl: (process.env.RAG_FASTAPI_BASE_URL ?? 'http://127.0.0.1:8000')
+      .trim()
+      .replace(/\/$/, ''),
+    ragResolvePath: process.env.RAG_CP_RESOLVE_PATH ?? 'cp/resolve',
     zenApiKey: process.env.OPENCODE_ZEN_API_KEY?.trim() ?? '',
     zenBaseUrl: (
       process.env.OPENCODE_ZEN_BASE_URL ?? 'https://opencode.ai/zen/v1'
