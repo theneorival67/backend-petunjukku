@@ -22,6 +22,7 @@ import { UsersModule } from './modules/users/users.module';
 import { AiModule } from './modules/ai/ai.module';
 import { PlacesModule } from './modules/places/places.module';
 import { RagModule } from './modules/rag/rag.module';
+import { DocumentsModule } from './modules/documents/documents.module';
 import { aiConfig } from './config/ai.config';
 import { googleMapsConfig } from './config/google-maps.config';
 
@@ -52,6 +53,7 @@ import { googleMapsConfig } from './config/google-maps.config';
     AiModule,
     PlacesModule,
     RagModule,
+    DocumentsModule,
   ],
   controllers: [AppController],
   providers: [

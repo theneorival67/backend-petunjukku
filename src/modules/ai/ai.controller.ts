@@ -1,11 +1,10 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { ConfigService } from '@nestjs/config';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
@@ -15,39 +14,27 @@ import {
   KinaSessionTitleDto,
   KinaSessionTitleResponseDto,
 } from './dto/kina-session-title.dto';
-import { OpencodeGoClient } from './opencode-go.client';
 
 @ApiTags('ai')
 @ApiBearerAuth('supabase')
 @Controller('ai')
 export class AiController {
-  constructor(
-    private readonly aiService: AiService,
-    private readonly opencodeGo: OpencodeGoClient,
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private readonly aiService: AiService) {}
 
   @Get('status')
-  @ApiOperation({ summary: 'Status konfigurasi OpenCode Go' })
+  @ApiOperation({ summary: 'Status konfigurasi FastAPI AI internal' })
   status() {
-    const cfg = this.configService.get('ai', { infer: true });
-    return {
-      enabled: this.aiService.isEnabled(),
-      configured: this.opencodeGo.isConfigured(),
-      baseUrl: cfg?.goBaseUrl ?? null,
-      envModel: cfg?.envModel ?? null,
-      chatModel: cfg?.chatModel ?? null,
-    };
+    return this.aiService.status();
   }
 
   @Post('kina/chat')
-  @ApiOperation({ summary: 'Obrolan dengan KINA (OpenCode Go)' })
+  @ApiOperation({ summary: 'Obrolan dengan KINA melalui FastAPI internal' })
   @ApiOkResponse({ type: KinaChatResponseDto })
   async kinaChat(
     @CurrentUser() user: AuthUser,
     @Body() dto: KinaChatDto,
   ): Promise<KinaChatResponseDto> {
-    return this.aiService.kinaChat(user, dto.messages);
+    return this.aiService.kinaChat(user, dto);
   }
 
   @Post('kina/session-title')
@@ -57,5 +44,56 @@ export class AiController {
     @Body() dto: KinaSessionTitleDto,
   ): Promise<KinaSessionTitleResponseDto> {
     return this.aiService.suggestSessionTitle(dto.message);
+  }
+
+  @Get('kina/chats/:projectId')
+  @ApiOperation({ summary: 'Ambil riwayat chat KINA untuk project RPP' })
+  kinaHistory(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+  ) {
+    return this.aiService.kinaHistory(user, projectId);
+  }
+
+  @Post('generate-rpp/:projectId')
+  @ApiOperation({
+    summary: 'Generate dokumen RPP final',
+    description:
+      'Mengambil konteks project, stages, chat, referensi, dan konteks sekolah lalu meneruskan payload ke FastAPI internal.',
+  })
+  generateRpp(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+  ) {
+    return this.aiService.generateRpp(user, projectId);
+  }
+
+  @Get('generated-rpp/:projectId')
+  @ApiOperation({
+    summary: 'Ambil hasil generated RPP milik project',
+  })
+  getGeneratedRpp(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+  ) {
+    return this.aiService.getGeneratedRpp(user, projectId);
+  }
+
+  @Put('generated-rpp/:generatedRppId')
+  @ApiOperation({
+    summary: 'Update hasil generated RPP',
+  })
+  updateGeneratedRpp(
+    @CurrentUser() user: AuthUser,
+    @Param('generatedRppId') generatedRppId: string,
+    @Body()
+    body: {
+      contentJson?: Record<string, unknown>;
+      contentMarkdown?: string;
+      usedReferences?: unknown[];
+      model?: string;
+    },
+  ) {
+    return this.aiService.updateGeneratedRpp(user, generatedRppId, body);
   }
 }

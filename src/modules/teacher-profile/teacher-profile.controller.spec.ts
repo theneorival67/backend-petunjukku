@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { TeacherClassService } from './teacher-class.service';
 import { TeacherProfileController } from './teacher-profile.controller';
 import { TeacherProfileService } from './teacher-profile.service';
+import { TeacherSubjectService } from './teacher-subject.service';
 
 describe('TeacherProfileController', () => {
   let controller: TeacherProfileController;
@@ -17,6 +19,8 @@ describe('TeacherProfileController', () => {
             update: jest.fn(),
           },
         },
+        { provide: TeacherSubjectService, useValue: {} },
+        { provide: TeacherClassService, useValue: {} },
       ],
     }).compile();
 

@@ -75,7 +75,7 @@ export class EnvironmentScanDto {
 
   @ApiProperty({
     description:
-      'google_places | google_places_opencode_go (jika kurasi AI aktif)',
+      'google_places | google_places_ai_service (jika kurasi AI aktif)',
   })
   source!: string;
 

@@ -1,9 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma, RppStatus } from '@prisma/client';
 
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { PrismaService } from '../../prisma/prisma.service';
-import type { KinaChatMessageDto } from './dto/kina-chat.dto';
+import { AiGatewayService } from '../rag/ai-gateway.service';
+import type { KinaChatDto, KinaChatMessageDto } from './dto/kina-chat.dto';
 import {
   curateNearbyPlaces,
   formatDistanceLabel,
@@ -11,7 +18,13 @@ import {
   type RawNearbyPlace,
 } from '../places/environment-curate';
 import type { AiEnvironmentResponseJson } from './ai-environment.types';
-import { OpencodeGoClient } from './opencode-go.client';
+
+type GenerateRppFastApiResponse = {
+  contentJson?: Record<string, unknown>;
+  contentMarkdown?: string;
+  usedReferences?: unknown[];
+  model?: string;
+};
 
 const ALLOWED_COLOR_KEYS = new Set([
   'emerald',
@@ -29,18 +42,29 @@ export class AiService {
   private readonly logger = new Logger(AiService.name);
 
   constructor(
-    private readonly opencodeGo: OpencodeGoClient,
+    private readonly aiGateway: AiGatewayService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
 
   isEnabled(): boolean {
-    return this.opencodeGo.isConfigured();
+    const cfg = this.configService.get('ai', { infer: true })!;
+    return Boolean(cfg.enabled && cfg.aiServiceBaseUrl);
+  }
+
+  status() {
+    const cfg = this.configService.get('ai', { infer: true })!;
+    return {
+      enabled: this.isEnabled(),
+      configured: Boolean(cfg.aiServiceBaseUrl),
+      baseUrl: cfg.aiServiceBaseUrl,
+      gateway: 'fastapi_internal',
+    };
   }
 
   async suggestSessionTitle(message: string): Promise<{
     title: string;
-    source: 'opencode_go' | 'fallback';
+    source: 'ai_service' | 'fallback';
   }> {
     const cleaned = message.trim().slice(0, 2000);
     const fallback = this.fallbackSessionTitle(cleaned);
@@ -53,36 +77,14 @@ export class AiService {
       return { title: fallback, source: 'fallback' };
     }
 
-    const cfg = this.configService.get('ai', { infer: true })!;
-
     try {
-      const parsed = await this.opencodeGo.chatCompletionJson<{
+      const parsed = await this.aiGateway.postInternal<{
         title?: string;
-      }>({
-        model: cfg.envModel,
-        apiPath: cfg.envApiPath,
-        messages: [
-          {
-            role: 'system',
-            content: `Anda membuat judul singkat untuk sesi perencanaan pembelajaran guru Indonesia.
-Aturan:
-- Maksimal 50 karakter, Bahasa Indonesia natural
-- Fokus topik/mata pelajaran/intensi dari pesan guru
-- JANGAN gunakan judul generik seperti "RPP Intrakurikuler Baru" atau "RPP Kokurikuler Baru"
-- Tanpa tanda kutip, tanpa emoji
-- Balas hanya JSON: {"title":"..."}`,
-          },
-          {
-            role: 'user',
-            content: `Pesan guru:\n${cleaned}`,
-          },
-        ],
-        maxTokens: 120,
-      });
+      }>('internal/ai/kina/session-title', { message: cleaned });
 
       return {
         title: this.normalizeSessionTitle(parsed.title, fallback),
-        source: 'opencode_go',
+        source: 'ai_service',
       };
     } catch (error) {
       this.logger.warn(
@@ -133,13 +135,19 @@ Aturan:
 
   async kinaChat(
     user: AuthUser,
-    messages: KinaChatMessageDto[],
+    dto: KinaChatDto | KinaChatMessageDto[],
   ): Promise<{
     reply: string;
     model: string;
-    source: 'opencode_go' | 'fallback';
+    source: 'ai_service' | 'fallback';
   }> {
-    const cfg = this.configService.get('ai', { infer: true })!;
+    const messages = Array.isArray(dto)
+      ? dto
+      : (dto.messages ?? [
+          ...(dto.message?.trim()
+            ? [{ role: 'user' as const, content: dto.message }]
+            : []),
+        ]);
     const trimmed = messages
       .filter((m) => m.content?.trim())
       .slice(-20)
@@ -157,9 +165,27 @@ Aturan:
       };
     }
 
-    const profileContext = await this.buildKinaProfileContext(user);
-    const systemPrompt = this.buildKinaSystemPrompt(profileContext);
+    const projectId = Array.isArray(dto) ? undefined : dto.projectId;
+    const latestUserMessage = trimmed
+      .filter((message) => message.role === 'user')
+      .at(-1);
 
+    if (projectId) {
+      await this.assertProjectOwner(user, projectId);
+    }
+
+    if (latestUserMessage) {
+      await this.prisma.kinaChat.create({
+        data: {
+          userId: user.id,
+          rppProjectId: projectId,
+          role: 'user',
+          content: latestUserMessage.content,
+        },
+      });
+    }
+
+    const profileContext = await this.buildKinaProfileContext(user, projectId);
     if (!this.isEnabled()) {
       return {
         reply: this.fallbackKinaReply(
@@ -171,70 +197,149 @@ Aturan:
     }
 
     try {
-      const reply = await this.opencodeGo.chatCompletionText({
-        model: cfg.chatModel,
-        apiPath: cfg.chatApiPath,
+      const response = await this.aiGateway.postInternal<{
+        reply?: string;
+        model?: string;
+      }>('internal/ai/kina/chat', {
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        },
+        projectId,
+        message: Array.isArray(dto) ? undefined : dto.message,
         messages: [
-          { role: 'system', content: systemPrompt },
           ...trimmed.map((m) => ({
             role: m.role,
             content: m.content,
           })),
         ],
-        maxTokens: cfg.maxTokens,
-        temperature: 0.65,
+        context: profileContext,
       });
 
-      return {
-        reply: reply.trim(),
-        model: cfg.chatModel,
-        source: 'opencode_go',
+      const result = {
+        reply:
+          response.reply?.trim() ||
+          this.fallbackKinaReply(trimmed[trimmed.length - 1]?.content ?? ''),
+        model: response.model ?? 'fastapi',
+        source: 'ai_service' as const,
       };
+
+      await this.prisma.kinaChat.create({
+        data: {
+          userId: user.id,
+          rppProjectId: projectId,
+          role: 'assistant',
+          content: result.reply,
+          metadata: {
+            model: result.model,
+            source: result.source,
+          },
+        },
+      });
+
+      return result;
     } catch (error) {
       this.logger.warn(
         `KINA chat gagal: ${error instanceof Error ? error.message : error}`,
       );
-      return {
+      const fallback = {
         reply: this.fallbackKinaReply(
           trimmed[trimmed.length - 1]?.content ?? '',
         ),
         model: 'fallback',
-        source: 'fallback',
+        source: 'fallback' as const,
       };
+      await this.prisma.kinaChat.create({
+        data: {
+          userId: user.id,
+          rppProjectId: projectId,
+          role: 'assistant',
+          content: fallback.reply,
+          metadata: {
+            model: fallback.model,
+            source: fallback.source,
+          },
+        },
+      });
+      return fallback;
     }
   }
 
-  private async buildKinaProfileContext(user: AuthUser): Promise<string> {
+  async kinaHistory(user: AuthUser, projectId: string) {
+    const project = await this.prisma.rppProject.findFirst({
+      where: { id: projectId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project RPP tidak ditemukan.');
+    }
+
+    return this.prisma.kinaChat.findMany({
+      where: {
+        userId: user.id,
+        rppProjectId: projectId,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private async buildKinaProfileContext(
+    user: AuthUser,
+    projectId?: string,
+  ): Promise<string> {
     try {
       const profile = await this.prisma.teacherProfile.findUnique({
         where: { userId: user.id },
         include: { school: true },
       });
-      if (!profile) {
+      const project = projectId
+        ? await this.prisma.rppProject.findFirst({
+            where: { id: projectId, userId: user.id },
+            include: {
+              school: true,
+              teacherSubject: true,
+              teacherClass: true,
+              stages: { orderBy: { stageNumber: 'asc' } },
+            },
+          })
+        : null;
+
+      if (projectId && !project) {
+        throw new NotFoundException('Project RPP tidak ditemukan.');
+      }
+
+      if (!profile && !project) {
         return user.name ? `Nama guru: ${user.name}.` : '';
       }
+
       const parts = [
-        `Nama guru: ${profile.fullName}`,
-        profile.school?.name ? `Sekolah: ${profile.school.name}` : null,
-        profile.school?.city ? `Kota: ${profile.school.city}` : null,
+        profile?.fullName ? `Nama guru: ${profile.fullName}` : null,
+        profile?.school?.name ? `Sekolah: ${profile.school.name}` : null,
+        profile?.school?.city ? `Kota: ${profile.school.city}` : null,
+        project ? `Project RPP: ${project.title}` : null,
+        project ? `Jenis RPP: ${project.rppType}` : null,
+        project ? `Mapel: ${project.subject}` : null,
+        project?.phase ? `Fase: ${project.phase}` : null,
+        project?.gradeLevel ? `Kelas: ${project.gradeLevel}` : null,
+        project?.topic ? `Topik: ${project.topic}` : null,
+        project?.teacherClass?.className
+          ? `Kelas ajar: ${project.teacherClass.className}`
+          : null,
+        project
+          ? `Stage tersimpan: ${project.stages
+              .map((stage) => `${stage.stageNumber}. ${stage.stageName}`)
+              .join('; ')}`
+          : null,
       ].filter(Boolean);
       return parts.join('\n');
-    } catch {
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
       return user.name ? `Nama guru: ${user.name}.` : '';
     }
-  }
-
-  private buildKinaSystemPrompt(profileContext: string): string {
-    return `Anda adalah KINA, asisten AI Studio Guru di aplikasi petunjukKU untuk guru Indonesia.
-
-Peran Anda:
-- Membantu guru merencanakan pembelajaran intrakurikuler dan kokurikuler (RPP).
-- Menjawab singkat, jelas, ramah, dalam Bahasa Indonesia.
-- Jika guru ingin menyusun RPP lengkap, arahkan ke Studio Guru: pilih kartu Intrakurikuler atau Kokurikuler di layar utama.
-- Jangan mengarang kebijakan resmi Kemendikbud; jika ragu, sampaikan bahwa guru perlu verifikasi sumber resmi.
-- Jangan meminta data pribadi murid yang sensitif.
-
-${profileContext ? `Konteks guru:\n${profileContext}` : ''}`.trim();
   }
 
   private fallbackKinaReply(userText: string): string {
@@ -293,8 +398,6 @@ ${profileContext ? `Konteks guru:\n${profileContext}` : ''}`.trim();
       };
     }
 
-    const cfg = this.configService.get('ai', { infer: true })!;
-
     const candidatePayload = candidates.map((p) => ({
       id: p.id,
       name: p.name,
@@ -304,35 +407,19 @@ ${profileContext ? `Konteks guru:\n${profileContext}` : ''}`.trim();
       colorKey: p.colorKey,
     }));
 
-    const systemPrompt = `Anda adalah asisten pedagogis untuk guru Indonesia yang menyusun RPP berbasis konteks lokal.
-Pilih 4-6 lokasi di sekitar sekolah yang paling relevan untuk pembelajaran (observasi lingkungan, PBL, IPS, IPA, kewirausahaan).
-Gunakan HANYA id dari daftar kandidat. Jawab dalam Bahasa Indonesia.
-colorKey harus salah satu: emerald, amber, blue, violet, rose, slate, cyan, gray.
-relevanceScore 0-100.`;
-
-    const userPrompt = JSON.stringify({
-      sekolah: input.schoolName ?? 'Sekolah',
-      alamat: input.schoolAddress ?? '',
-      radiusMeter: input.radiusMeters,
-      kandidat: candidatePayload,
-    });
-
     try {
       const parsed =
-        await this.opencodeGo.chatCompletionJson<AiEnvironmentResponseJson>({
-          model: cfg.envModel,
-          apiPath: cfg.envApiPath,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            {
-              role: 'user',
-              content: `Kurasi lingkungan sekitar sekolah. Balas JSON dengan bentuk:
-{"summary":"string","places":[{"id":"string","category":"string","colorKey":"string","relevanceNote":"string","relevanceScore":number}]}
-Data:\n${userPrompt}`,
-            },
-          ],
-          maxTokens: Math.min(cfg.maxTokens, 1200),
-        });
+        await this.aiGateway.postInternal<AiEnvironmentResponseJson>(
+          'internal/ai/curate-school-environment',
+          {
+            schoolName: input.schoolName,
+            schoolAddress: input.schoolAddress,
+            latitude: input.latitude,
+            longitude: input.longitude,
+            radiusMeters: input.radiusMeters,
+            candidates: candidatePayload,
+          },
+        );
 
       const merged = this.mergeAiCuration(candidates, parsed);
       if (merged.places.length === 0) {
@@ -413,5 +500,248 @@ Data:\n${userPrompt}`,
       ? `sekitar ${schoolName}`
       : 'sekitar lokasi sekolah';
     return `Ditemukan ${places.length} titik ${label} yang dapat dipakai sebagai konteks pembelajaran.`;
+  }
+
+  async generateRpp(user: AuthUser, projectId: string) {
+    const context = await this.buildRppGenerationContext(user, projectId);
+
+    const response =
+      await this.aiGateway.postInternal<GenerateRppFastApiResponse>(
+        'internal/ai/generate-rpp',
+        context as Record<string, unknown>,
+      );
+
+    if (!response.contentJson || typeof response.contentJson !== 'object') {
+      throw new BadRequestException(
+        'AI service tidak mengembalikan contentJson yang valid.',
+      );
+    }
+
+    const generated = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.generatedRpp.create({
+        data: {
+          userId: user.id,
+          rppProjectId: projectId,
+          contentJson: response.contentJson as Prisma.InputJsonValue,
+          contentMarkdown: response.contentMarkdown,
+          usedReferences:
+            response.usedReferences === undefined
+              ? undefined
+              : (response.usedReferences as Prisma.InputJsonValue),
+          model: response.model,
+          status: 'success',
+        },
+        include: {
+          rppProject: true,
+          exportedDocuments: true,
+        },
+      });
+
+      if (response.usedReferences !== undefined) {
+        await tx.ragRetrievalLog.create({
+          data: {
+            userId: user.id,
+            rppProjectId: projectId,
+            generatedRppId: created.id,
+            query: {
+              subject: context.project.subject,
+              phase: context.project.phase,
+              topic: context.project.topic,
+            },
+            references: response.usedReferences as Prisma.InputJsonValue,
+            source: 'generate-rpp',
+          },
+        });
+      }
+
+      await tx.rppProject.update({
+        where: { id: projectId },
+        data: { status: RppStatus.generated },
+      });
+
+      return created;
+    });
+
+    return generated;
+  }
+
+  async getGeneratedRpp(user: AuthUser, projectId: string) {
+    await this.assertProjectOwner(user, projectId);
+
+    return this.prisma.generatedRpp.findMany({
+      where: {
+        userId: user.id,
+        rppProjectId: projectId,
+      },
+      include: {
+        exportedDocuments: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+  }
+
+  async updateGeneratedRpp(
+    user: AuthUser,
+    generatedRppId: string,
+    body: {
+      contentJson?: Record<string, unknown>;
+      contentMarkdown?: string;
+      usedReferences?: unknown[];
+      model?: string;
+    },
+  ) {
+    const existing = await this.prisma.generatedRpp.findFirst({
+      where: {
+        id: generatedRppId,
+        userId: user.id,
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Generated RPP tidak ditemukan.');
+    }
+
+    return this.prisma.generatedRpp.update({
+      where: { id: existing.id },
+      data: {
+        contentJson:
+          body.contentJson === undefined
+            ? undefined
+            : (body.contentJson as Prisma.InputJsonValue),
+        contentMarkdown: body.contentMarkdown,
+        usedReferences:
+          body.usedReferences === undefined
+            ? undefined
+            : (body.usedReferences as Prisma.InputJsonValue),
+        model: body.model,
+        status: 'regenerated',
+      },
+      include: {
+        exportedDocuments: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+  }
+
+  private async assertProjectOwner(user: AuthUser, projectId: string) {
+    const project = await this.prisma.rppProject.findFirst({
+      where: { id: projectId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project RPP tidak ditemukan.');
+    }
+
+    return project;
+  }
+
+  private async buildRppGenerationContext(user: AuthUser, projectId: string) {
+    const project = await this.prisma.rppProject.findFirst({
+      where: { id: projectId, userId: user.id },
+      include: {
+        teacherProfile: {
+          include: {
+            school: {
+              include: {
+                environmentScans: {
+                  orderBy: { fetchedAt: 'desc' },
+                  take: 1,
+                },
+              },
+            },
+          },
+        },
+        school: {
+          include: {
+            environmentScans: {
+              orderBy: { fetchedAt: 'desc' },
+              take: 1,
+            },
+          },
+        },
+        teacherSubject: true,
+        teacherClass: true,
+        stages: {
+          orderBy: { stageNumber: 'asc' },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project RPP tidak ditemukan.');
+    }
+
+    const chatSummary = await this.prisma.kinaChat.findMany({
+      where: {
+        userId: user.id,
+        rppProjectId: projectId,
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 40,
+    });
+
+    const environmentScan =
+      project.school?.environmentScans?.[0] ??
+      project.teacherProfile.school?.environmentScans?.[0] ??
+      null;
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
+      project: {
+        id: project.id,
+        title: project.title,
+        rppType: project.rppType,
+        subject: project.subject,
+        phase: project.phase,
+        gradeLevel: project.gradeLevel,
+        topic: project.topic,
+        totalJp: project.totalJp,
+        meetingCount: project.meetingCount,
+        semester: project.semester,
+        classConditions: project.classConditions,
+      },
+      teacherProfile: {
+        id: project.teacherProfile.id,
+        fullName: project.teacherProfile.fullName,
+        position: project.teacherProfile.position,
+        educationLevel: project.teacherProfile.educationLevel,
+        teachingExperienceYears: project.teacherProfile.teachingExperienceYears,
+        teachingContext: project.teacherProfile.teachingContext,
+      },
+      school: project.school,
+      teacherSubject: project.teacherSubject,
+      teacherClass: project.teacherClass,
+      stages: project.stages.map((stage) => ({
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson: stage.contentJson,
+        isCompleted: stage.isCompleted,
+      })),
+      chatSummary: chatSummary.map((chat) => ({
+        role: chat.role,
+        content: chat.content,
+        createdAt: chat.createdAt,
+      })),
+      placesContext: environmentScan
+        ? {
+            source: environmentScan.source,
+            latitude: environmentScan.latitude,
+            longitude: environmentScan.longitude,
+            radiusMeters: environmentScan.radiusMeters,
+            fetchedAt: environmentScan.fetchedAt,
+            payload: environmentScan.payload,
+          }
+        : null,
+    };
   }
 }

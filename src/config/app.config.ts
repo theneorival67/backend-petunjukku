@@ -41,7 +41,7 @@ export const databaseConfig = registerAs('database', () => ({
   directUrl: process.env.DIRECT_URL,
 }));
 
-// Lihat ./ai.config.ts (OpenCode Go)
+// Lihat ./ai.config.ts (FastAPI AI service internal)
 
 export const jwtConfig = registerAs('jwt', () => ({
   secret: process.env.JWT_SECRET,

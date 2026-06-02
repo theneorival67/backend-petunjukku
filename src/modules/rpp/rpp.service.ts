@@ -6,16 +6,18 @@ import {
 import { RppStatus, RppType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
+import { AiGatewayService } from '../rag/ai-gateway.service';
 import { UsersService } from '../users/users.service';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
+import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
-import { buildIntrakurikulerStageSeed } from './intrakurikuler-stage-seed';
 
 @Injectable()
 export class RppService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly aiGateway: AiGatewayService,
   ) {}
 
   private async getTeacherProfileOrThrow(user: AuthUser) {
@@ -112,12 +114,6 @@ export class RppService {
       );
     }
 
-    const stageSeed =
-      dto.rppType === RppType.intrakurikuler ||
-      dto.rppType === RppType.pjbl_kokurikuler
-        ? buildIntrakurikulerStageSeed()
-        : [];
-
     return this.prisma.rppProject.create({
       data: {
         userId: user.id,
@@ -136,7 +132,6 @@ export class RppService {
         semester: dto.semester?.trim() || undefined,
         classConditions: dto.classConditions?.trim() || undefined,
         status: RppStatus.draft,
-        ...(stageSeed.length > 0 ? { stages: { create: stageSeed } } : {}),
       },
       include: {
         school: true,
@@ -331,5 +326,143 @@ export class RppService {
     });
 
     return { id: existingProject.id, deleted: true };
+  }
+
+  async recommendStage(
+    user: AuthUser,
+    projectId: string,
+    stageNumber: number,
+  ): Promise<StageRecommendationResponseDto> {
+    if (stageNumber !== 2) {
+      throw new BadRequestException(
+        'Rekomendasi AI saat ini hanya tersedia untuk stageNumber 2.',
+      );
+    }
+
+    await this.usersService.syncSupabaseUser(user);
+
+    const project = await this.prisma.rppProject.findFirst({
+      where: { id: projectId, userId: user.id },
+      include: {
+        teacherProfile: {
+          include: {
+            school: {
+              include: {
+                environmentScans: {
+                  orderBy: { fetchedAt: 'desc' },
+                  take: 1,
+                },
+              },
+            },
+            subjects: true,
+            classes: true,
+          },
+        },
+        school: {
+          include: {
+            environmentScans: {
+              orderBy: { fetchedAt: 'desc' },
+              take: 1,
+            },
+          },
+        },
+        teacherSubject: true,
+        teacherClass: true,
+        stages: {
+          orderBy: { stageNumber: 'asc' },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project RPP tidak ditemukan.');
+    }
+
+    const stage1 = project.stages.find((stage) => stage.stageNumber === 1);
+    const environmentScan =
+      project.school?.environmentScans?.[0] ??
+      project.teacherProfile.school?.environmentScans?.[0] ??
+      null;
+
+    const payload = {
+      targetStageNumber: 2,
+      rppType: project.rppType,
+      recommendationType:
+        project.rppType === RppType.pjbl_kokurikuler
+          ? 'project_recommendation'
+          : 'learning_objectives_flow',
+      project: {
+        id: project.id,
+        title: project.title,
+        subject: project.subject,
+        phase: project.phase,
+        gradeLevel: project.gradeLevel,
+        topic: project.topic,
+        totalJp: project.totalJp,
+        meetingCount: project.meetingCount,
+        semester: project.semester,
+        classConditions: project.classConditions,
+        status: project.status,
+      },
+      teacherProfile: {
+        id: project.teacherProfile.id,
+        fullName: project.teacherProfile.fullName,
+        position: project.teacherProfile.position,
+        educationLevel: project.teacherProfile.educationLevel,
+        teachingExperienceYears: project.teacherProfile.teachingExperienceYears,
+        teachingContext: project.teacherProfile.teachingContext,
+      },
+      school: project.school
+        ? {
+            id: project.school.id,
+            name: project.school.name,
+            npsn: project.school.npsn,
+            province: project.school.province,
+            city: project.school.city,
+            district: project.school.district,
+            address: project.school.address,
+            latitude: project.school.latitude,
+            longitude: project.school.longitude,
+            schoolLevel: project.school.schoolLevel,
+            schoolType: project.school.schoolType,
+            schoolEnvironment: project.school.schoolEnvironment,
+            availableFacilities: project.school.availableFacilities,
+            internetAccess: project.school.internetAccess,
+            localContext: project.school.localContext,
+          }
+        : null,
+      teacherSubject: project.teacherSubject,
+      teacherClass: project.teacherClass,
+      previousStages: project.stages
+        .filter((stage) => stage.stageNumber < 2)
+        .map((stage) => ({
+          stageNumber: stage.stageNumber,
+          stageName: stage.stageName,
+          contentJson: stage.contentJson,
+          isCompleted: stage.isCompleted,
+        })),
+      stage1: stage1
+        ? {
+            stageName: stage1.stageName,
+            contentJson: stage1.contentJson,
+            isCompleted: stage1.isCompleted,
+          }
+        : null,
+      placesContext: environmentScan
+        ? {
+            source: environmentScan.source,
+            latitude: environmentScan.latitude,
+            longitude: environmentScan.longitude,
+            radiusMeters: environmentScan.radiusMeters,
+            fetchedAt: environmentScan.fetchedAt,
+            payload: environmentScan.payload,
+          }
+        : null,
+    };
+
+    return this.aiGateway.postInternal<StageRecommendationResponseDto>(
+      'internal/ai/recommend-stage',
+      payload,
+    );
   }
 }

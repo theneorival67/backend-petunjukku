@@ -352,7 +352,7 @@ export class PlacesService {
       schoolLatitude: input.latitude,
       schoolLongitude: input.longitude,
       radiusMeters: input.radiusMeters,
-      source: curated.usedAi ? 'google_places_opencode_go' : 'google_places',
+      source: curated.usedAi ? 'google_places_ai_service' : 'google_places',
       risks: this.assessEnvironmentRisks(rawPlaces, curated.places),
     };
     const fetchedAt = new Date();

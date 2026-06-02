@@ -12,6 +12,6 @@ export class KinaSessionTitleResponseDto {
   @ApiProperty()
   title!: string;
 
-  @ApiProperty({ description: 'opencode_go | fallback' })
+  @ApiProperty({ description: 'ai_service | fallback' })
   source!: string;
 }

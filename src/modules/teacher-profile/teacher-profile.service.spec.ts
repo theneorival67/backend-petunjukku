@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PlacesService } from '../places/places.service';
 import { UsersService } from '../users/users.service';
 import { TeacherProfileService } from './teacher-profile.service';
 
@@ -30,6 +31,10 @@ describe('TeacherProfileService', () => {
           useValue: {
             syncSupabaseUser: jest.fn(),
           },
+        },
+        {
+          provide: PlacesService,
+          useValue: {},
         },
       ],
     }).compile();

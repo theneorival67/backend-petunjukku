@@ -21,8 +21,12 @@ model User {
   role     UserRole @default(teacher)
   isActive Boolean  @default(true) @map("is_active")
 
-  teacherProfile TeacherProfile?
-  rppProjects    RppProject[]
+  teacherProfile    TeacherProfile?
+  rppProjects       RppProject[]
+  generatedRpps     GeneratedRpp[]
+  exportedDocuments ExportedDocument[]
+  ragRetrievalLogs  RagRetrievalLog[]
+  kinaChats         KinaChat[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -50,8 +54,8 @@ model School {
   internetAccess      String? @map("internet_access")
   localContext        String? @map("local_context")
 
-  teacherProfiles TeacherProfile[]
-  rppProjects     RppProject[]
+  teacherProfiles  TeacherProfile[]
+  rppProjects      RppProject[]
   environmentScans SchoolEnvironmentScan[]
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -68,7 +72,7 @@ model SchoolEnvironmentScan {
 
   latitude     Float
   longitude    Float
-  radiusMeters Int   @map("radius_meters")
+  radiusMeters Int    @map("radius_meters")
   payload      Json
   source       String
 
@@ -96,7 +100,9 @@ model TeacherProfile {
   educationLevel          String? @map("education_level")
   teachingExperienceYears Int?    @map("teaching_experience_years")
   bio                     String?
-  /** Identitas + percakapan onboarding (JSON) — sumber tunggal konteks mengajar */
+  /**
+   * Identitas + percakapan onboarding (JSON) — sumber tunggal konteks mengajar
+   */
   teachingContext         Json?   @map("teaching_context")
   onboardingCompleted     Boolean @default(false) @map("onboarding_completed")
 
@@ -179,7 +185,11 @@ model RppProject {
   teacherSubject TeacherSubject? @relation(fields: [teacherSubjectId], references: [id], onDelete: SetNull)
   teacherClass   TeacherClass?   @relation(fields: [teacherClassId], references: [id], onDelete: SetNull)
 
-  stages RppStage[]
+  stages            RppStage[]
+  generatedRpps     GeneratedRpp[]
+  exportedDocuments ExportedDocument[]
+  ragRetrievalLogs  RagRetrievalLog[]
+  kinaChats         KinaChat[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -203,6 +213,96 @@ model RppStage {
 
   @@unique([rppProjectId, stageNumber])
   @@map("rpp_stages")
+}
+
+model KinaChat {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  rppProjectId String?  @map("rpp_project_id") @db.Uuid
+  role         ChatRole
+  content      String
+  metadata     Json?
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rppProject RppProject? @relation(fields: [rppProjectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@index([rppProjectId, createdAt])
+  @@map("kina_chats")
+}
+
+model GeneratedRpp {
+  id              String           @id @default(uuid()) @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+  rppProjectId    String           @map("rpp_project_id") @db.Uuid
+  contentJson     Json             @map("content_json")
+  contentMarkdown String?          @map("content_markdown")
+  usedReferences  Json?            @map("used_references")
+  model           String?
+  status          GenerationStatus @default(success)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rppProject RppProject @relation(fields: [rppProjectId], references: [id], onDelete: Cascade)
+
+  exportedDocuments ExportedDocument[]
+  ragRetrievalLogs  RagRetrievalLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, updatedAt])
+  @@index([rppProjectId, updatedAt])
+  @@map("generated_rpps")
+}
+
+model ExportedDocument {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  rppProjectId   String         @map("rpp_project_id") @db.Uuid
+  generatedRppId String         @map("generated_rpp_id") @db.Uuid
+  fileType       ExportFileType @map("file_type")
+  fileName       String         @map("file_name")
+  filePath       String         @map("file_path")
+  fileUrl        String?        @map("file_url")
+  mimeType       String         @map("mime_type")
+  sizeBytes      Int            @map("size_bytes")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rppProject   RppProject   @relation(fields: [rppProjectId], references: [id], onDelete: Cascade)
+  generatedRpp GeneratedRpp @relation(fields: [generatedRppId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@index([rppProjectId, createdAt])
+  @@index([generatedRppId, createdAt])
+  @@map("exported_documents")
+}
+
+model RagRetrievalLog {
+  id             String  @id @default(uuid()) @db.Uuid
+  userId         String  @map("user_id") @db.Uuid
+  rppProjectId   String? @map("rpp_project_id") @db.Uuid
+  generatedRppId String? @map("generated_rpp_id") @db.Uuid
+  query          Json?
+  references     Json?
+  source         String?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rppProject   RppProject?   @relation(fields: [rppProjectId], references: [id], onDelete: Cascade)
+  generatedRpp GeneratedRpp? @relation(fields: [generatedRppId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@index([rppProjectId, createdAt])
+  @@index([generatedRppId, createdAt])
+  @@map("rag_retrieval_logs")
 }
 
 enum UserRole {

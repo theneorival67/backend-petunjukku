@@ -7,6 +7,8 @@ import {
 } from '@nestjs/swagger';
 
 import { AiGatewayService } from './ai-gateway.service';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { RagSearchDto, RagSearchResponseDto } from './dto/rag-search.dto';
 
 @ApiTags('rag')
@@ -20,7 +22,10 @@ export class RagController {
     summary: 'Mencari referensi Capaian Pembelajaran yang relevan',
   })
   @ApiOkResponse({ type: RagSearchResponseDto })
-  search(@Body() dto: RagSearchDto): Promise<RagSearchResponseDto> {
-    return this.aiGatewayService.search(dto);
+  search(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: RagSearchDto,
+  ): Promise<RagSearchResponseDto> {
+    return this.aiGatewayService.search(dto, user);
   }
 }

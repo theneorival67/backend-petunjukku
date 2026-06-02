@@ -22,12 +22,30 @@ export class KinaChatMessageDto {
 }
 
 export class KinaChatDto {
+  @ApiPropertyOptional({
+    description:
+      'Project RPP yang sedang dibahas. Jika dikirim, backend memvalidasi project milik user login dan menambahkan konteks project.',
+  })
+  @IsOptional()
+  @IsString()
+  projectId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Pesan tunggal dari frontend. Tetap kompatibel dengan messages[] yang sudah berjalan.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  message?: string;
+
   @ApiProperty({ type: KinaChatMessageDto, isArray: true })
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(24)
   @ValidateNested({ each: true })
   @Type(() => KinaChatMessageDto)
-  messages!: KinaChatMessageDto[];
+  messages?: KinaChatMessageDto[];
 }
 
 export class KinaChatResponseDto {
@@ -37,6 +55,6 @@ export class KinaChatResponseDto {
   @ApiProperty()
   model!: string;
 
-  @ApiProperty({ description: 'opencode_go | fallback' })
+  @ApiProperty({ description: 'ai_service | fallback' })
   source!: string;
 }

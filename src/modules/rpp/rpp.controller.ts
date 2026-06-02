@@ -13,6 +13,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
+import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { RppService } from './rpp.service';
 
 @ApiTags('rpp-projects')
@@ -40,6 +41,20 @@ export class RppController {
   @Get(':id')
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.rppService.findOne(user, id);
+  }
+
+  @ApiOperation({
+    summary: 'Minta rekomendasi AI untuk Stage 2 tanpa menyimpan ke stage',
+    description:
+      'Hanya berlaku untuk stageNumber=2. NestJS mengambil konteks project dari database, meneruskan payload ke FastAPI internal, lalu mengembalikan rekomendasi agar guru bisa review/edit.',
+  })
+  @Post(':projectId/ai/stages/:stageNumber/recommend')
+  recommendStage(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+    @Param('stageNumber') stageNumber: string,
+  ): Promise<StageRecommendationResponseDto> {
+    return this.rppService.recommendStage(user, projectId, Number(stageNumber));
   }
 
   @ApiOperation({ summary: 'Update project RPP' })

@@ -6,7 +6,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 
+import type { AuthUser } from '../../common/interfaces/auth-user.interface';
+import { PrismaService } from '../../prisma/prisma.service';
 import type {
   RagReferenceDto,
   RagSearchDto,
@@ -33,9 +36,66 @@ type FastApiCpResolveResponse = {
 export class AiGatewayService {
   private readonly logger = new Logger(AiGatewayService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  async search(dto: RagSearchDto): Promise<RagSearchResponseDto> {
+  async postInternal<TResponse>(
+    path: string,
+    payload: Record<string, unknown>,
+  ): Promise<TResponse> {
+    const cfg = this.configService.get('ai', { infer: true })!;
+    const normalizedPath = path.replace(/^\//, '');
+    const url = `${cfg.aiServiceBaseUrl}/${normalizedPath}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), cfg.requestTimeoutMs);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (cfg.internalApiKey) {
+      headers['X-Internal-API-Key'] = cfg.internalApiKey;
+    }
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        this.logger.warn(
+          `AI FastAPI ${res.status} ${normalizedPath}: ${errText.slice(0, 300)}`,
+        );
+        throw new BadGatewayException(`AI FastAPI gagal (${res.status}).`);
+      }
+
+      return (await res.json()) as TResponse;
+    } catch (error) {
+      if (error instanceof BadGatewayException) {
+        throw error;
+      }
+      this.logger.warn(
+        `AI FastAPI request error ${normalizedPath}: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+      throw new ServiceUnavailableException(
+        'Tidak dapat menghubungi layanan AI FastAPI internal.',
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async search(
+    dto: RagSearchDto,
+    user?: AuthUser,
+  ): Promise<RagSearchResponseDto> {
     const fase = dto.fase?.trim();
     const mataPelajaran = dto.mataPelajaran?.trim();
 
@@ -53,13 +113,26 @@ export class AiGatewayService {
       similarity_threshold: dto.similarity_threshold ?? 0.2,
     });
 
-    return {
+    const result = {
       query: data.query ?? dto.query,
       cpText: data.cpText ?? '',
       selectedRecordId: data.selectedRecordId ?? null,
       confidence: Number(data.confidence ?? 0),
       references: this.mapReferences(data.sources ?? []),
     };
+
+    if (user) {
+      await this.prisma.ragRetrievalLog.create({
+        data: {
+          userId: user.id,
+          query: dto as unknown as Prisma.InputJsonValue,
+          references: result.references as unknown as Prisma.InputJsonValue,
+          source: 'rag-search',
+        },
+      });
+    }
+
+    return result;
   }
 
   private async resolveCp(payload: {
@@ -70,42 +143,8 @@ export class AiGatewayService {
     similarity_threshold: number;
   }): Promise<FastApiCpResolveResponse> {
     const cfg = this.configService.get('ai', { infer: true })!;
-    const resolvePath = (cfg.ragResolvePath ?? 'cp/resolve').replace(
-      /^\//,
-      '',
-    );
-    const url = `${cfg.ragBaseUrl}/${resolvePath}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), cfg.requestTimeoutMs);
-
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        this.logger.warn(`RAG FastAPI ${res.status}: ${errText.slice(0, 300)}`);
-        throw new BadGatewayException(`RAG FastAPI gagal (${res.status}).`);
-      }
-
-      return (await res.json()) as FastApiCpResolveResponse;
-    } catch (error) {
-      if (error instanceof BadGatewayException) {
-        throw error;
-      }
-      this.logger.warn(
-        `RAG FastAPI request error: ${error instanceof Error ? error.message : error}`,
-      );
-      throw new ServiceUnavailableException(
-        'Tidak dapat menghubungi layanan RAG FastAPI.',
-      );
-    } finally {
-      clearTimeout(timeout);
-    }
+    const resolvePath = cfg.ragResolvePath ?? 'cp/resolve';
+    return this.postInternal<FastApiCpResolveResponse>(resolvePath, payload);
   }
 
   private mapReferences(sources: FastApiSourceChunk[]): RagReferenceDto[] {
