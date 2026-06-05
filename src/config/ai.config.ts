@@ -18,6 +18,6 @@ export const aiConfig = registerAs('ai', () => {
     aiServiceBaseUrl,
     internalApiKey: process.env.INTERNAL_API_KEY?.trim() ?? '',
     ragBaseUrl: aiServiceBaseUrl,
-    ragResolvePath: process.env.RAG_CP_RESOLVE_PATH ?? 'cp/resolve',
+    ragResolvePath: process.env.RAG_CP_RESOLVE_PATH ?? 'internal/rag/search',
   };
 });

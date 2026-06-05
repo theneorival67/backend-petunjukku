@@ -1,0 +1,341 @@
+{
+  "info": {
+    "_postman_id": "84a9f8b8-cd77-4544-9a32-petunjukku-nestjs-intra",
+    "name": "Petunjukku NestJS - Intrakurikuler",
+    "description": "Flow uji API Intrakurikuler lewat NestJS. Isi environment accessToken dari Supabase session sebelum menjalankan request private.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "00 Health",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "01 Auth Me",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/auth/me",
+          "host": ["{{baseUrl}}"],
+          "path": ["auth", "me"]
+        }
+      }
+    },
+    {
+      "name": "02 Upsert Teacher Profile",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Fauzan\",\n  \"phone\": \"081234567890\",\n  \"position\": \"Guru Matematika\",\n  \"educationLevel\": \"S1 Pendidikan Matematika\",\n  \"teachingExperienceYears\": 5,\n  \"bio\": \"Senang membuat pembelajaran kontekstual dan aktif.\",\n  \"schoolName\": \"SMP Negeri Contoh\",\n  \"schoolCity\": \"Depok\",\n  \"schoolProvince\": \"Jawa Barat\",\n  \"schoolAddress\": \"Jl. Contoh No. 1, Depok\",\n  \"context\": {\n    \"onboardingSource\": \"postman-local\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/teacher-profile",
+          "host": ["{{baseUrl}}"],
+          "path": ["teacher-profile"]
+        }
+      }
+    },
+    {
+      "name": "03 Create Subject",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.id) pm.environment.set('teacherSubjectId', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"subjectName\": \"MATEMATIKA\",\n  \"phase\": \"D\",\n  \"gradeLevel\": \"Kelas 8\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/teacher-profile/subjects",
+          "host": ["{{baseUrl}}"],
+          "path": ["teacher-profile", "subjects"]
+        }
+      }
+    },
+    {
+      "name": "04 Create Class",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.id) pm.environment.set('teacherClassId', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"className\": \"8A\",\n  \"gradeLevel\": \"Kelas 8\",\n  \"academicYear\": \"2025/2026\",\n  \"studentCount\": 32,\n  \"studentCharacteristics\": \"Murid aktif, suka contoh konkret, kemampuan numerasi beragam.\",\n  \"learningChallenges\": [\n    \"Sebagian murid masih kurang percaya diri menjelaskan langkah aljabar\",\n    \"Kemampuan menyederhanakan bentuk aljabar belum merata\"\n  ],\n  \"dominantLearningStyle\": \"visual dan latihan bertahap\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/teacher-profile/classes",
+          "host": ["{{baseUrl}}"],
+          "path": ["teacher-profile", "classes"]
+        }
+      }
+    },
+    {
+      "name": "05 Create Intrakurikuler Project",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.id) pm.environment.set('projectId', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"RPP Polinomial Sederhana\",\n  \"rppType\": \"intrakurikuler\",\n  \"teacherSubjectId\": \"{{teacherSubjectId}}\",\n  \"teacherClassId\": \"{{teacherClassId}}\",\n  \"topic\": \"Polinomial sederhana\",\n  \"totalJp\": 6,\n  \"meetingCount\": 3,\n  \"semester\": \"Semester Ganjil 2025\",\n  \"classConditions\": \"Kelas aktif, perlu latihan bertahap dan contoh kontekstual.\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rpp/projects",
+          "host": ["{{baseUrl}}"],
+          "path": ["rpp", "projects"]
+        }
+      }
+    },
+    {
+      "name": "06 Save Stage 1",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"stageNumber\": 1,\n  \"stageName\": \"Konteks Dasar Pembelajaran\",\n  \"isCompleted\": true,\n  \"contentJson\": {\n    \"namaGuru\": \"Fauzan\",\n    \"jenjang\": \"SMP\",\n    \"kelas\": \"8A\",\n    \"fase\": \"D\",\n    \"mataPelajaran\": \"MATEMATIKA\",\n    \"materi\": \"Polinomial sederhana\",\n    \"alokasiWaktu\": \"6 JP dalam 3 pertemuan\",\n    \"kondisiKelas\": \"Murid aktif, kemampuan numerasi beragam, perlu contoh konkret dan latihan bertahap.\",\n    \"fasilitas\": [\"papan tulis\", \"proyektor\", \"gawai guru\"]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rpp/projects/{{projectId}}/stages",
+          "host": ["{{baseUrl}}"],
+          "path": ["rpp", "projects", "{{projectId}}", "stages"]
+        }
+      }
+    },
+    {
+      "name": "07 Recommend Stage 2",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/rpp/projects/{{projectId}}/ai/stages/2/recommend",
+          "host": ["{{baseUrl}}"],
+          "path": [
+            "rpp",
+            "projects",
+            "{{projectId}}",
+            "ai",
+            "stages",
+            "2",
+            "recommend"
+          ]
+        },
+        "description": "Output intrakurikuler yang diharapkan: recommendations.capaianPembelajaran dan recommendations.tujuanPembelajaran. Setelah review, salin ke request 08."
+      }
+    },
+    {
+      "name": "08 Save Stage 2 Approved",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"stageNumber\": 2,\n  \"stageName\": \"Fondasi Tujuan Pembelajaran\",\n  \"isCompleted\": true,\n  \"contentJson\": {\n    \"capaianPembelajaran\": \"Tempel CP dari response request 07 di sini.\",\n    \"tujuanPembelajaran\": [\n      \"Tempel TP 1 dari response request 07 di sini.\",\n      \"Tempel TP 2 dari response request 07 di sini.\",\n      \"Tempel TP 3 dari response request 07 di sini.\"\n    ]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rpp/projects/{{projectId}}/stages",
+          "host": ["{{baseUrl}}"],
+          "path": ["rpp", "projects", "{{projectId}}", "stages"]
+        }
+      }
+    },
+    {
+      "name": "09 KINA Stage 3 Opening",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"projectId\": \"{{projectId}}\",\n  \"message\": \"\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/ai/kina/chat",
+          "host": ["{{baseUrl}}"],
+          "path": ["ai", "kina", "chat"]
+        }
+      }
+    },
+    {
+      "name": "10 KINA Stage 3 Reply",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"projectId\": \"{{projectId}}\",\n  \"message\": \"Saya ingin kegiatan campuran: diskusi singkat, contoh bertahap, lalu latihan kelompok.\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/ai/kina/chat",
+          "host": ["{{baseUrl}}"],
+          "path": ["ai", "kina", "chat"]
+        }
+      }
+    },
+    {
+      "name": "11 KINA History",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/ai/kina/chats/{{projectId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["ai", "kina", "chats", "{{projectId}}"]
+        }
+      }
+    },
+    {
+      "name": "12 RAG Search CP",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"Fase D Matematika Polinomial sederhana\",\n  \"fase\": \"D\",\n  \"mataPelajaran\": \"Matematika\",\n  \"materiPokokBahasan\": \"Polinomial sederhana\",\n  \"top_k\": 5,\n  \"similarity_threshold\": 0.2\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rag/search",
+          "host": ["{{baseUrl}}"],
+          "path": ["rag", "search"]
+        }
+      }
+    },
+    {
+      "name": "13 Generate RPP Final",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.id) pm.environment.set('generatedRppId', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/ai/generate-rpp/{{projectId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["ai", "generate-rpp", "{{projectId}}"]
+        }
+      }
+    },
+    {
+      "name": "14 Get Generated RPP",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/ai/generated-rpp/{{projectId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["ai", "generated-rpp", "{{projectId}}"]
+        }
+      }
+    }
+  ]
+}

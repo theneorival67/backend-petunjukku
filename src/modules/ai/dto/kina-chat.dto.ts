@@ -57,4 +57,10 @@ export class KinaChatResponseDto {
 
   @ApiProperty({ description: 'ai_service | fallback' })
   source!: string;
+
+  @ApiPropertyOptional({ type: [Object] })
+  usedReferences?: unknown[];
+
+  @ApiPropertyOptional({ type: [String] })
+  suggestedFollowUpQuestions?: string[];
 }

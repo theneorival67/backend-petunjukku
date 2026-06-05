@@ -87,6 +87,28 @@ export class RppService {
     return teacherClass;
   }
 
+  private toJsonObject(value: unknown): Record<string, unknown> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+
+    return {};
+  }
+
+  private toStringList(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean);
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      return [value.trim()];
+    }
+
+    return [];
+  }
+
   async create(user: AuthUser, dto: CreateRppProjectDto) {
     const profile = await this.getTeacherProfileOrThrow(user);
 
@@ -384,16 +406,28 @@ export class RppService {
       project.teacherProfile.school?.environmentScans?.[0] ??
       null;
 
+    const recommendationType =
+      project.rppType === RppType.pjbl_kokurikuler
+        ? 'project_recommendation'
+        : 'learning_objectives_flow';
+    const targetStage = {
+      stageNumber: 2,
+      stageName:
+        project.rppType === RppType.pjbl_kokurikuler
+          ? 'Rekomendasi Proyek'
+          : 'Fondasi Tujuan Pembelajaran',
+      recommendationType,
+      topic: project.topic || project.title,
+    };
+
     const payload = {
       targetStageNumber: 2,
       rppType: project.rppType,
-      recommendationType:
-        project.rppType === RppType.pjbl_kokurikuler
-          ? 'project_recommendation'
-          : 'learning_objectives_flow',
+      recommendationType,
       project: {
         id: project.id,
         title: project.title,
+        rppType: project.rppType,
         subject: project.subject,
         phase: project.phase,
         gradeLevel: project.gradeLevel,
@@ -426,25 +460,47 @@ export class RppService {
             schoolLevel: project.school.schoolLevel,
             schoolType: project.school.schoolType,
             schoolEnvironment: project.school.schoolEnvironment,
-            availableFacilities: project.school.availableFacilities,
+            availableFacilities: this.toStringList(
+              project.school.availableFacilities,
+            ),
             internetAccess: project.school.internetAccess,
             localContext: project.school.localContext,
           }
         : null,
       teacherSubject: project.teacherSubject,
-      teacherClass: project.teacherClass,
+      teacherClass: project.teacherClass
+        ? {
+            id: project.teacherClass.id,
+            className: project.teacherClass.className,
+            gradeLevel: project.teacherClass.gradeLevel,
+            academicYear: project.teacherClass.academicYear,
+            studentCount: project.teacherClass.studentCount,
+            studentCharacteristics:
+              project.teacherClass.studentCharacteristics,
+            learningChallenges: this.toStringList(
+              project.teacherClass.learningChallenges,
+            ),
+            dominantLearningStyle: project.teacherClass.dominantLearningStyle,
+          }
+        : null,
       previousStages: project.stages
         .filter((stage) => stage.stageNumber < 2)
         .map((stage) => ({
           stageNumber: stage.stageNumber,
           stageName: stage.stageName,
-          contentJson: stage.contentJson,
+          contentJson: this.toJsonObject(stage.contentJson),
           isCompleted: stage.isCompleted,
         })),
+      targetStage,
+      options: {
+        topK: 5,
+        language: 'id',
+        outputFormat: 'json',
+      },
       stage1: stage1
         ? {
             stageName: stage1.stageName,
-            contentJson: stage1.contentJson,
+            contentJson: this.toJsonObject(stage1.contentJson),
             isCompleted: stage1.isCompleted,
           }
         : null,

@@ -143,8 +143,22 @@ export class AiGatewayService {
     similarity_threshold: number;
   }): Promise<FastApiCpResolveResponse> {
     const cfg = this.configService.get('ai', { infer: true })!;
-    const resolvePath = cfg.ragResolvePath ?? 'cp/resolve';
-    return this.postInternal<FastApiCpResolveResponse>(resolvePath, payload);
+    const resolvePath = cfg.ragResolvePath ?? 'internal/rag/search';
+    const query = [
+      payload.mataPelajaran,
+      payload.fase,
+      payload.materiPokokBahasan,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return this.postInternal<FastApiCpResolveResponse>(resolvePath, {
+      query,
+      subject: payload.mataPelajaran,
+      phase: payload.fase,
+      topK: payload.top_k,
+      documentType: 'capaian_pembelajaran',
+    });
   }
 
   private mapReferences(sources: FastApiSourceChunk[]): RagReferenceDto[] {

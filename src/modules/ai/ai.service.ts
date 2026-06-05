@@ -26,6 +26,13 @@ type GenerateRppFastApiResponse = {
   model?: string;
 };
 
+type KinaFastApiResponse = {
+  reply?: string;
+  model?: string;
+  usedReferences?: unknown[];
+  suggestedFollowUpQuestions?: string[];
+};
+
 const ALLOWED_COLOR_KEYS = new Set([
   'emerald',
   'amber',
@@ -140,23 +147,29 @@ export class AiService {
     reply: string;
     model: string;
     source: 'ai_service' | 'fallback';
+    usedReferences?: unknown[];
+    suggestedFollowUpQuestions?: string[];
   }> {
-    const messages = Array.isArray(dto)
-      ? dto
-      : (dto.messages ?? [
-          ...(dto.message?.trim()
-            ? [{ role: 'user' as const, content: dto.message }]
-            : []),
-        ]);
-    const trimmed = messages
+    const projectId = Array.isArray(dto) ? undefined : dto.projectId;
+    const suppliedMessages = Array.isArray(dto) ? dto : (dto.messages ?? []);
+    const trimmed = suppliedMessages
       .filter((m) => m.content?.trim())
       .slice(-20)
       .map((m) => ({
         role: m.role,
         content: m.content.trim().slice(0, 4000),
       }));
+    const latestFromMessages = trimmed
+      .filter((message) => message.role === 'user')
+      .at(-1);
+    const explicitMessage = Array.isArray(dto) ? undefined : dto.message?.trim();
+    const latestUserContent = (
+      explicitMessage ||
+      latestFromMessages?.content ||
+      ''
+    ).slice(0, 4000);
 
-    if (trimmed.length === 0) {
+    if (!projectId && !latestUserContent) {
       return {
         reply:
           'Silakan tulis pertanyaan Anda—saya siap membantu merencanakan pembelajaran.',
@@ -165,76 +178,78 @@ export class AiService {
       };
     }
 
-    const projectId = Array.isArray(dto) ? undefined : dto.projectId;
-    const latestUserMessage = trimmed
-      .filter((message) => message.role === 'user')
-      .at(-1);
-
+    const existingHistory = projectId
+      ? (
+          await this.prisma.kinaChat.findMany({
+            where: {
+              userId: user.id,
+              rppProjectId: projectId,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 40,
+          })
+        ).reverse()
+      : [];
     if (projectId) {
       await this.assertProjectOwner(user, projectId);
     }
 
-    if (latestUserMessage) {
+    if (latestUserContent) {
       await this.prisma.kinaChat.create({
         data: {
           userId: user.id,
           rppProjectId: projectId,
           role: 'user',
-          content: latestUserMessage.content,
+          content: latestUserContent,
         },
       });
     }
 
-    const profileContext = await this.buildKinaProfileContext(user, projectId);
+    const fastApiPayload = projectId
+      ? await this.buildKinaFastApiPayload(user, projectId, existingHistory)
+      : null;
     if (!this.isEnabled()) {
+      const fallback = {
+        reply: this.fallbackKinaReply(latestUserContent),
+        model: 'fallback',
+        source: 'fallback' as const,
+      };
+      await this.saveAssistantReply(user.id, projectId, fallback);
+      return fallback;
+    }
+
+    if (!fastApiPayload) {
       return {
-        reply: this.fallbackKinaReply(
-          trimmed[trimmed.length - 1]?.content ?? '',
-        ),
+        reply: this.fallbackKinaReply(latestUserContent),
         model: 'fallback',
         source: 'fallback',
       };
     }
 
     try {
-      const response = await this.aiGateway.postInternal<{
-        reply?: string;
-        model?: string;
-      }>('internal/ai/kina/chat', {
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
+      const response = await this.aiGateway.postInternal<KinaFastApiResponse>(
+        'internal/ai/kina-chat',
+        {
+          ...fastApiPayload,
+          message: latestUserContent,
         },
-        projectId,
-        message: Array.isArray(dto) ? undefined : dto.message,
-        messages: [
-          ...trimmed.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        ],
-        context: profileContext,
-      });
+      );
 
       const result = {
-        reply:
-          response.reply?.trim() ||
-          this.fallbackKinaReply(trimmed[trimmed.length - 1]?.content ?? ''),
+        reply: response.reply?.trim() || this.fallbackKinaReply(latestUserContent),
         model: response.model ?? 'fastapi',
         source: 'ai_service' as const,
+        usedReferences: response.usedReferences ?? [],
+        suggestedFollowUpQuestions: response.suggestedFollowUpQuestions ?? [],
       };
 
-      await this.prisma.kinaChat.create({
-        data: {
-          userId: user.id,
-          rppProjectId: projectId,
-          role: 'assistant',
-          content: result.reply,
-          metadata: {
-            model: result.model,
-            source: result.source,
-          },
+      await this.saveAssistantReply(user.id, projectId, {
+        reply: result.reply,
+        model: result.model,
+        source: result.source,
+        metadata: {
+          usedReferences: result.usedReferences,
+          suggestedFollowUpQuestions: result.suggestedFollowUpQuestions,
         },
       });
 
@@ -244,24 +259,11 @@ export class AiService {
         `KINA chat gagal: ${error instanceof Error ? error.message : error}`,
       );
       const fallback = {
-        reply: this.fallbackKinaReply(
-          trimmed[trimmed.length - 1]?.content ?? '',
-        ),
+        reply: this.fallbackKinaReply(latestUserContent),
         model: 'fallback',
         source: 'fallback' as const,
       };
-      await this.prisma.kinaChat.create({
-        data: {
-          userId: user.id,
-          rppProjectId: projectId,
-          role: 'assistant',
-          content: fallback.reply,
-          metadata: {
-            model: fallback.model,
-            source: fallback.source,
-          },
-        },
-      });
+      await this.saveAssistantReply(user.id, projectId, fallback);
       return fallback;
     }
   }
@@ -283,6 +285,144 @@ export class AiService {
       },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  private async saveAssistantReply(
+    userId: string,
+    projectId: string | undefined,
+    result: {
+      reply: string;
+      model: string;
+      source: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    await this.prisma.kinaChat.create({
+      data: {
+        userId,
+        rppProjectId: projectId,
+        role: 'assistant',
+        content: result.reply,
+        metadata: {
+          model: result.model,
+          source: result.source,
+          ...(result.metadata ?? {}),
+        },
+      },
+    });
+  }
+
+  private toJsonObject(value: unknown): Record<string, unknown> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+
+    return {};
+  }
+
+  private toStringList(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean);
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      return [value.trim()];
+    }
+
+    return [];
+  }
+
+  private async buildKinaFastApiPayload(
+    user: AuthUser,
+    projectId: string,
+    history: Array<{ role: string; content: string }>,
+  ): Promise<Record<string, unknown>> {
+    const project = await this.prisma.rppProject.findFirst({
+      where: { id: projectId, userId: user.id },
+      include: {
+        teacherProfile: {
+          include: { school: true },
+        },
+        school: true,
+        teacherSubject: true,
+        teacherClass: true,
+        stages: { orderBy: { stageNumber: 'asc' } },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project RPP tidak ditemukan.');
+    }
+
+    const school = project.school ?? project.teacherProfile.school;
+
+    return {
+      project: {
+        id: project.id,
+        title: project.title,
+        rppType: project.rppType,
+        subject: project.subject,
+        phase: project.phase,
+        gradeLevel: project.gradeLevel,
+        topic: project.topic,
+        totalJp: project.totalJp,
+        meetingCount: project.meetingCount,
+        semester: project.semester,
+        classConditions: project.classConditions,
+        teacherName: project.teacherProfile.fullName,
+        schoolName: school?.name,
+        className: project.teacherClass?.className,
+      },
+      teacherProfile: {
+        fullName: project.teacherProfile.fullName,
+        position: project.teacherProfile.position,
+        educationLevel: project.teacherProfile.educationLevel,
+        teachingExperienceYears: project.teacherProfile.teachingExperienceYears,
+      },
+      school: school
+        ? {
+            name: school.name,
+            province: school.province,
+            city: school.city,
+            district: school.district,
+            address: school.address,
+            schoolEnvironment: school.schoolEnvironment,
+            availableFacilities: this.toStringList(school.availableFacilities),
+            localContext: school.localContext,
+          }
+        : {},
+      teacherSubject: project.teacherSubject
+        ? {
+            subjectName: project.teacherSubject.subjectName,
+            phase: project.teacherSubject.phase,
+            gradeLevel: project.teacherSubject.gradeLevel,
+          }
+        : {},
+      teacherClass: project.teacherClass
+        ? {
+            className: project.teacherClass.className,
+            gradeLevel: project.teacherClass.gradeLevel,
+            studentCount: project.teacherClass.studentCount,
+            studentCharacteristics:
+              project.teacherClass.studentCharacteristics,
+            learningChallenges: this.toStringList(
+              project.teacherClass.learningChallenges,
+            ),
+            dominantLearningStyle: project.teacherClass.dominantLearningStyle,
+          }
+        : {},
+      stages: project.stages.map((stage) => ({
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson: this.toJsonObject(stage.contentJson),
+      })),
+      chatHistory: history.map((chat) => ({
+        role: chat.role,
+        message: chat.content,
+      })),
+    };
   }
 
   private async buildKinaProfileContext(
