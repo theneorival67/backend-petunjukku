@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -14,6 +14,7 @@ import {
   KinaSessionTitleDto,
   KinaSessionTitleResponseDto,
 } from './dto/kina-session-title.dto';
+import { Stage3DiagramDto } from './dto/stage3-diagram.dto';
 
 @ApiTags('ai')
 @ApiBearerAuth('supabase')
@@ -53,6 +54,25 @@ export class AiController {
     @Param('projectId') projectId: string,
   ) {
     return this.aiService.kinaHistory(user, projectId);
+  }
+
+  @Delete('kina/chats/:projectId')
+  @ApiOperation({ summary: 'Hapus riwayat chat KINA untuk project RPP' })
+  clearKinaHistory(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+  ) {
+    return this.aiService.clearKinaHistory(user, projectId);
+  }
+
+  @Post('stage3/diagrams/:projectId')
+  @ApiOperation({ summary: 'Generate diagram alur pembelajaran Stage 3' })
+  generateStage3Diagrams(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+    @Body() dto: Stage3DiagramDto,
+  ) {
+    return this.aiService.generateStage3Diagrams(user, projectId, dto);
   }
 
   @Post('generate-rpp/:projectId')

@@ -11,6 +11,7 @@ import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AiGatewayService } from '../rag/ai-gateway.service';
 import type { KinaChatDto, KinaChatMessageDto } from './dto/kina-chat.dto';
+import type { Stage3DiagramDto } from './dto/stage3-diagram.dto';
 import {
   curateNearbyPlaces,
   formatDistanceLabel,
@@ -151,6 +152,7 @@ export class AiService {
     suggestedFollowUpQuestions?: string[];
   }> {
     const projectId = Array.isArray(dto) ? undefined : dto.projectId;
+    const requireAi = !Array.isArray(dto) && Boolean(dto.requireAi);
     const suppliedMessages = Array.isArray(dto) ? dto : (dto.messages ?? []);
     const trimmed = suppliedMessages
       .filter((m) => m.content?.trim())
@@ -209,6 +211,11 @@ export class AiService {
       ? await this.buildKinaFastApiPayload(user, projectId, existingHistory)
       : null;
     if (!this.isEnabled()) {
+      if (requireAi) {
+        throw new BadRequestException(
+          'Layanan AI belum aktif. KINA tidak boleh memakai fallback untuk request ini.',
+        );
+      }
       const fallback = {
         reply: this.fallbackKinaReply(latestUserContent),
         model: 'fallback',
@@ -219,6 +226,11 @@ export class AiService {
     }
 
     if (!fastApiPayload) {
+      if (requireAi) {
+        throw new BadRequestException(
+          'Project RPP wajib tersedia untuk memanggil KINA AI.',
+        );
+      }
       return {
         reply: this.fallbackKinaReply(latestUserContent),
         model: 'fallback',
@@ -232,8 +244,13 @@ export class AiService {
         {
           ...fastApiPayload,
           message: latestUserContent,
+          requireAi,
         },
       );
+
+      if (requireAi && !response.reply?.trim()) {
+        throw new Error('KINA AI mengembalikan respons kosong.');
+      }
 
       const result = {
         reply: response.reply?.trim() || this.fallbackKinaReply(latestUserContent),
@@ -258,6 +275,11 @@ export class AiService {
       this.logger.warn(
         `KINA chat gagal: ${error instanceof Error ? error.message : error}`,
       );
+      if (requireAi) {
+        throw new BadRequestException(
+          'KINA AI belum berhasil merespons. Periksa konfigurasi AI dan coba lagi.',
+        );
+      }
       const fallback = {
         reply: this.fallbackKinaReply(latestUserContent),
         model: 'fallback',
@@ -285,6 +307,65 @@ export class AiService {
       },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  async clearKinaHistory(user: AuthUser, projectId: string) {
+    await this.assertProjectOwner(user, projectId);
+    const result = await this.prisma.kinaChat.deleteMany({
+      where: {
+        userId: user.id,
+        rppProjectId: projectId,
+      },
+    });
+    return { deleted: result.count };
+  }
+
+  async generateStage3Diagrams(
+    user: AuthUser,
+    projectId: string,
+    dto: Stage3DiagramDto,
+  ) {
+    await this.assertProjectOwner(user, projectId);
+
+    if (!this.isEnabled()) {
+      throw new BadRequestException(
+        'Layanan AI belum aktif. Diagram Stage 3 tidak bisa dibuat tanpa AI.',
+      );
+    }
+
+    const history = await this.prisma.kinaChat.findMany({
+      where: {
+        userId: user.id,
+        rppProjectId: projectId,
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 40,
+    });
+    const fastApiPayload = await this.buildKinaFastApiPayload(
+      user,
+      projectId,
+      history.map((chat) => ({ role: chat.role, content: chat.content })),
+    );
+
+    try {
+      return await this.aiGateway.postInternal(
+        'internal/ai/generate-stage3-diagrams',
+        {
+          ...fastApiPayload,
+          stage3Inputs: dto.stage3Inputs,
+          options: dto.options ?? {},
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Generate diagram Stage 3 gagal: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+      throw new BadRequestException(
+        'AI belum berhasil membuat diagram Stage 3. Periksa konfigurasi AI dan coba lagi.',
+      );
+    }
   }
 
   private async saveAssistantReply(

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  IsBoolean,
   IsArray,
   IsIn,
   IsOptional,
@@ -46,6 +47,14 @@ export class KinaChatDto {
   @ValidateNested({ each: true })
   @Type(() => KinaChatMessageDto)
   messages?: KinaChatMessageDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Jika true, backend tidak boleh memakai fallback lokal saat AI tidak tersedia.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  requireAi?: boolean;
 }
 
 export class KinaChatResponseDto {
