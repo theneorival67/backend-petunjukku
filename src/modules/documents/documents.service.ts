@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ExportFileType, Prisma } from '@prisma/client';
+import { existsSync, readFileSync } from 'fs';
+import { resolve } from 'path';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseService } from '../../supabase/supabase.service';
@@ -39,6 +41,21 @@ type PdfLine = {
   gapBefore: number;
   gapAfter: number;
 };
+
+type DocxZipFile = { name: string; content: string | Buffer };
+
+const DOCX_PAGE_WIDTH_TWIPS = 11906;
+const DOCX_PAGE_HEIGHT_TWIPS = 16838;
+const DOCX_PAGE_WIDTH_EMU = DOCX_PAGE_WIDTH_TWIPS * 635;
+const DOCX_PAGE_HEIGHT_EMU = DOCX_PAGE_HEIGHT_TWIPS * 635;
+const TEMPLATE_BLUE = '1F497D';
+const TEMPLATE_DARK = '232D34';
+const TEMPLATE_DARK_BLUE = '1C3556';
+const TEMPLATE_GREEN = '2F6B3D';
+const TEMPLATE_GOLD = 'D18A4B';
+const TEMPLATE_ORANGE = 'F28C38';
+const TEMPLATE_TABLE_BORDER = 'DDE7E2';
+const TEMPLATE_TABLE_FILL = 'F7F9F8';
 
 @Injectable()
 export class DocumentsService {
@@ -275,28 +292,234 @@ export class DocumentsService {
     markdown: string,
     identityOverrides: Record<string, string>,
   ): Buffer {
-    const body = this.parseMarkdownDocument(title, markdown, identityOverrides)
+    const blocks = this.parseMarkdownDocument(
+      title,
+      markdown,
+      identityOverrides,
+    );
+    const contentBlocks = blocks.filter((block) => block.type !== 'title');
+    const coverImage = this.loadCoverImage();
+    const body = contentBlocks
       .map((block) => this.renderDocxBlock(block))
       .join('');
+    const documentRelationships = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${coverImage ? '<Relationship Id="rIdCoverImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/cover.png"/>' : ''}<Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>`;
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>
+${this.renderDocxCover(title, identityOverrides, Boolean(coverImage))}
+${this.renderDocxTableOfContents(contentBlocks)}
 ${body}
-<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
 </w:body></w:document>`;
-    return this.zipStore([
+    const files: DocxZipFile[] = [
       {
         name: '[Content_Types].xml',
-        content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+        content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${coverImage ? '<Default Extension="png" ContentType="image/png"/>' : ''}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>`,
       },
       {
         name: '_rels/.rels',
         content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
       },
+      ...(coverImage
+        ? [
+            {
+              name: 'word/media/cover.png',
+              content: coverImage,
+            },
+          ]
+        : []),
+      {
+        name: 'word/_rels/document.xml.rels',
+        content: documentRelationships,
+      },
+      {
+        name: 'word/footer1.xml',
+        content: this.renderDocxFooter(title, identityOverrides),
+      },
       {
         name: 'word/document.xml',
         content: documentXml,
       },
-    ]);
+    ];
+    return this.zipStore(files);
+  }
+
+  private loadCoverImage(): Buffer | undefined {
+    const candidates = [
+      resolve(process.cwd(), '../cover.png'),
+      resolve(process.cwd(), 'cover.png'),
+    ];
+    const coverPath = candidates.find(
+      (candidate) => candidate.endsWith('.png') && existsSync(candidate),
+    );
+
+    if (!coverPath) {
+      this.logger.warn(
+        'cover.png tidak ditemukan. DOCX dibuat tanpa cover image.',
+      );
+      return undefined;
+    }
+
+    return readFileSync(coverPath);
+  }
+
+  private renderDocxCover(
+    title: string,
+    identity: Record<string, string>,
+    withImage: boolean,
+  ): string {
+    const coverTitle = this.coverTitle(title, identity);
+    const educationLevel = this.usableMetadataValue(identity.educationLevel);
+    const gradeLevel = this.usableMetadataValue(identity.gradeLevel);
+    const phase = this.usableMetadataValue(identity.phase);
+    const subject = this.usableMetadataValue(identity.subject);
+    const meetingCount = this.usableMetadataValue(identity.meetingCount);
+    const timeAllocation = this.usableMetadataValue(identity.timeAllocation);
+    const classLabel = gradeLevel
+      ? `${educationLevel || 'Kelas'} ${gradeLevel}`.trim()
+      : [educationLevel, phase].filter(Boolean).join(' - ') || subject || 'RPP';
+    const meetingLabel =
+      meetingCount && timeAllocation
+        ? `${meetingCount} Pertemuan x ${timeAllocation}`
+        : timeAllocation ||
+          (meetingCount ? `${meetingCount} Pertemuan` : 'Pembelajaran');
+    const typeLabel =
+      this.usableMetadataValue(identity.rppType) || 'Intrakurikuler';
+
+    return [
+      withImage ? this.renderDocxCoverImage() : '',
+      this.renderDocxParagraph('RPP - Intrakurikuler', {
+        align: 'center',
+        bold: true,
+        color: TEMPLATE_GREEN,
+        fontSize: 36,
+        spacingBefore: 2800,
+        spacingAfter: 260,
+      }),
+      this.renderDocxParagraph(coverTitle, {
+        align: 'center',
+        bold: true,
+        color: '000000',
+        fontSize: 58,
+        spacingAfter: 180,
+      }),
+      this.renderDocxParagraph(phase || subject || educationLevel || '', {
+        align: 'center',
+        bold: true,
+        color: '000000',
+        fontSize: 40,
+        spacingAfter: 420,
+      }),
+      this.renderDocxCoverChips([
+        { text: classLabel, fill: '31A94B' },
+        { text: meetingLabel, fill: '2876A8' },
+        { text: typeLabel, fill: TEMPLATE_ORANGE },
+      ]),
+      this.renderDocxSectionBreak({
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    ].join('');
+  }
+
+  private renderDocxCoverImage(): string {
+    return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="${DOCX_PAGE_WIDTH_EMU}" cy="${DOCX_PAGE_HEIGHT_EMU}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="1" name="Cover"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="0"/></wp:cNvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="cover.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdCoverImage"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${DOCX_PAGE_WIDTH_EMU}" cy="${DOCX_PAGE_HEIGHT_EMU}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>`;
+  }
+
+  private renderDocxCoverChips(
+    chips: Array<{ text: string; fill: string }>,
+  ): string {
+    const cells = chips
+      .map(
+        (chip) =>
+          `<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/><w:shd w:fill="${chip.fill}"/><w:tcBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/></w:tcBorders></w:tcPr>${this.renderDocxParagraph(
+            chip.text,
+            {
+              align: 'center',
+              bold: true,
+              color: 'FFFFFF',
+              fontSize: 20,
+              spacingAfter: 0,
+            },
+          )}</w:tc>`,
+      )
+      .join('');
+
+    return `<w:tbl><w:tblPr><w:tblW w:w="7600" w:type="dxa"/><w:jc w:val="center"/><w:tblCellSpacing w:w="220" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid><w:tr>${cells}</w:tr></w:tbl>`;
+  }
+
+  private renderDocxTableOfContents(blocks: DocumentBlock[]): string {
+    const headings = blocks.filter(
+      (block): block is { type: 'heading'; level: 1 | 2 | 3; text: string } =>
+        block.type === 'heading' && block.level <= 2,
+    );
+
+    return [
+      this.renderDocxParagraph('Daftar Isi', {
+        align: 'center',
+        bold: true,
+        color: TEMPLATE_BLUE,
+        fontSize: 28,
+        spacingBefore: 320,
+        spacingAfter: 240,
+      }),
+      ...headings.map((heading) =>
+        this.renderDocxParagraph(heading.text, {
+          bold: heading.level === 1,
+          color: heading.level === 1 ? TEMPLATE_BLUE : TEMPLATE_DARK,
+          fontSize: heading.level === 1 ? 22 : 20,
+          spacingAfter: 80,
+          indentLeft: heading.level === 1 ? 0 : 360,
+        }),
+      ),
+      this.renderDocxPageBreak(),
+    ].join('');
+  }
+
+  private renderDocxFooter(
+    title: string,
+    identity: Record<string, string>,
+  ): string {
+    const footerTitle = this.coverTitle(title, identity);
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="0"/></w:pPr>${this.renderDocxRuns(
+      `RPP Intrakurikuler - ${footerTitle} | Halaman `,
+      {
+        color: '6B7280',
+        size: 18,
+      },
+    )}<w:r><w:rPr><w:rFonts w:ascii="Frutiger" w:hAnsi="Frutiger" w:cs="Frutiger"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:rFonts w:ascii="Frutiger" w:hAnsi="Frutiger" w:cs="Frutiger"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:instrText xml:space="preserve">PAGE</w:instrText></w:r><w:r><w:rPr><w:rFonts w:ascii="Frutiger" w:hAnsi="Frutiger" w:cs="Frutiger"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`;
+  }
+
+  private coverTitle(title: string, identity: Record<string, string>): string {
+    const fromTopic =
+      identity.topic && !this.isEmptyMetadataValue(identity.topic)
+        ? identity.topic
+        : title;
+    const cleaned = fromTopic
+      .replace(/[-_]+/g, ' ')
+      .replace(/\bintrakurikuler\b/gi, '')
+      .replace(/\brpp\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return cleaned
+      .toLowerCase()
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  private renderDocxPageBreak(): string {
+    return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  }
+
+  private renderDocxSectionBreak(margins: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  }): string {
+    return `<w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/><w:pgSz w:w="${DOCX_PAGE_WIDTH_TWIPS}" w:h="${DOCX_PAGE_HEIGHT_TWIPS}"/><w:pgMar w:top="${margins.top}" w:right="${margins.right}" w:bottom="${margins.bottom}" w:left="${margins.left}" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:pPr></w:p>`;
   }
 
   private parseMarkdownDocument(
@@ -311,7 +534,7 @@ ${body}
 
     for (let index = 0; index < lines.length; index += 1) {
       const rawLine = lines[index] ?? '';
-      const line = rawLine.trim();
+      const line = this.normalizeMarkdownLine(rawLine.trim());
 
       if (!line || /^-{3,}$/.test(line)) {
         if (blocks[blocks.length - 1]?.type !== 'spacer') {
@@ -336,7 +559,9 @@ ${body}
           let nextIndex = index + 1;
 
           for (; nextIndex < lines.length; nextIndex += 1) {
-            const nextLine = (lines[nextIndex] ?? '').trim();
+            const nextLine = this.normalizeMarkdownLine(
+              (lines[nextIndex] ?? '').trim(),
+            );
             if (/^#{1,6}\s+/.test(nextLine)) {
               break;
             }
@@ -392,13 +617,18 @@ ${body}
         continue;
       }
 
-      blocks.push({ type: 'paragraph', text: this.cleanInlineText(line, true) });
+      blocks.push({
+        type: 'paragraph',
+        text: this.cleanInlineText(line, true),
+      });
     }
 
     return blocks.filter(
       (block, index, all) =>
         block.type !== 'spacer' ||
-        (index > 0 && index < all.length - 1 && all[index - 1].type !== 'spacer'),
+        (index > 0 &&
+          index < all.length - 1 &&
+          all[index - 1].type !== 'spacer'),
     );
   }
 
@@ -420,6 +650,14 @@ ${body}
     return trimmed;
   }
 
+  private normalizeMarkdownLine(line: string): string {
+    return line
+      .replace(/^(>\s*)+/, '')
+      .replace(/^\*\*Langkah\s*-\s*\d+\*\*\s*/i, '')
+      .replace(/^Langkah\s*-\s*\d+\s*/i, '')
+      .trim();
+  }
+
   private buildIdentityOverrides(
     project: RppProjectForDocument,
     generatedAt: Date,
@@ -435,7 +673,9 @@ ${body}
     );
 
     return {
-      schoolName: this.cleanMetadataValue(school?.name ?? contextSchoolName ?? ''),
+      schoolName: this.cleanMetadataValue(
+        school?.name ?? contextSchoolName ?? '',
+      ),
       teacherName: this.cleanMetadataValue(project.teacherProfile.fullName),
       educationLevel: this.formatEducationLevel(
         school?.schoolLevel ??
@@ -503,38 +743,40 @@ ${body}
           value: this.cleanMetadataValue(value),
         };
       })
-      .filter((row): row is MetadataRow => Boolean(row));
+      .filter(
+        (row): row is MetadataRow =>
+          row !== undefined && !this.isEmptyMetadataValue(row.value),
+      );
   }
 
   private applyMetadataOverride(
     row: MetadataRow,
     identityOverrides: Record<string, string>,
   ): MetadataRow {
-    const override = identityOverrides[row.key];
+    const override = this.usableMetadataValue(identityOverrides[row.key]);
+    const authoritativeKeys = new Set([
+      'schoolName',
+      'teacherName',
+      'academicYear',
+    ]);
 
-    if (override && this.isEmptyMetadataValue(row.value)) {
+    if (
+      override &&
+      (authoritativeKeys.has(row.key) || this.isEmptyMetadataValue(row.value))
+    ) {
       return {
         ...row,
-        value: this.cleanMetadataValue(override),
-      };
-    }
-
-    if (row.key === 'academicYear' && override) {
-      return {
-        ...row,
-        value: this.cleanMetadataValue(override),
+        value: this.formatMetadataRowValue(row.key, override),
       };
     }
 
     return {
       ...row,
-      value: this.cleanMetadataValue(row.value),
+      value: this.formatMetadataRowValue(row.key, row.value),
     };
   }
 
-  private parseMetadataRow(
-    line: string,
-  ): MetadataRow | undefined {
+  private parseMetadataRow(line: string): MetadataRow | undefined {
     const cleaned = line.replace(/^[-*]\s+/, '').trim();
     const match = cleaned.match(/^([A-Za-z][\w\s./()-]{1,42}):\s*(.*)$/);
     if (!match) {
@@ -620,9 +862,42 @@ ${body}
     return cleaned;
   }
 
+  private formatMetadataRowValue(key: string, value: string): string {
+    const cleaned = this.cleanMetadataValue(value);
+    if (this.isEmptyMetadataValue(cleaned)) {
+      return '-';
+    }
+
+    if (key === 'educationLevel') {
+      return this.formatEducationLevel(cleaned);
+    }
+
+    if (key === 'phase') {
+      return this.formatPhase(cleaned);
+    }
+
+    if (key === 'rppType') {
+      return this.formatRppType(cleaned);
+    }
+
+    return cleaned;
+  }
+
   private isEmptyMetadataValue(value: string): boolean {
     const cleaned = value.trim();
-    return !cleaned || /^[-–—]$/.test(cleaned) || /^(none|null|undefined)$/i.test(cleaned);
+    return (
+      !cleaned ||
+      /^[-–—]$/.test(cleaned) ||
+      /^(none|null|undefined)$/i.test(cleaned)
+    );
+  }
+
+  private usableMetadataValue(value: string | undefined): string | undefined {
+    const cleaned = value?.trim();
+    if (!cleaned || this.isEmptyMetadataValue(cleaned)) {
+      return undefined;
+    }
+    return cleaned;
   }
 
   private formatEducationLevel(value: string): string {
@@ -638,7 +913,10 @@ ${body}
       return '';
     }
     return /^fase\s+/i.test(cleaned)
-      ? cleaned.replace(/^fase\s+([a-z])/i, (_, letter: string) => `Fase ${letter.toUpperCase()}`)
+      ? cleaned.replace(
+          /^fase\s+([a-z])/i,
+          (_, letter: string) => `Fase ${letter.toUpperCase()}`,
+        )
       : `Fase ${cleaned.toUpperCase()}`;
   }
 
@@ -760,25 +1038,38 @@ ${body}
     if (block.type === 'title') {
       return this.renderDocxParagraph(block.text, {
         bold: true,
-        color: 'DC2626',
+        color: TEMPLATE_BLUE,
         fontSize: 34,
         spacingAfter: 220,
       });
     }
 
     if (block.type === 'heading') {
-      const headingOptions =
-        block.level === 1
-          ? { fontSize: 28, spacingBefore: 180, spacingAfter: 130 }
-          : block.level === 2
-            ? { fontSize: 24, spacingBefore: 170, spacingAfter: 110 }
-            : { fontSize: 21, spacingBefore: 140, spacingAfter: 90 };
+      const isMajorSection = /^[A-Z]\.\s+/.test(block.text);
+      const isNumberedSection = /^\d+[.)]\s+/.test(block.text);
+      const headingOptions = isMajorSection
+        ? { fontSize: 28, spacingBefore: 220, spacingAfter: 140 }
+        : isNumberedSection
+          ? { fontSize: 25, spacingBefore: 180, spacingAfter: 110 }
+          : block.level === 1
+            ? { fontSize: 28, spacingBefore: 180, spacingAfter: 130 }
+            : block.level === 2
+              ? { fontSize: 24, spacingBefore: 170, spacingAfter: 110 }
+              : { fontSize: 21, spacingBefore: 140, spacingAfter: 90 };
+      const headingColor = isMajorSection
+        ? '000000'
+        : isNumberedSection
+          ? TEMPLATE_BLUE
+          : block.level === 1
+            ? '000000'
+            : block.level === 2
+              ? TEMPLATE_BLUE
+              : TEMPLATE_GOLD;
 
       return this.renderDocxParagraph(block.text, {
         ...headingOptions,
         bold: true,
-        color: block.level === 3 ? '334155' : 'B91C1C',
-        bottomBorder: block.level <= 2,
+        color: headingColor,
       });
     }
 
@@ -789,6 +1080,7 @@ ${body}
     if (block.type === 'bullet') {
       return this.renderDocxParagraph(block.text, {
         bullet: true,
+        color: TEMPLATE_DARK,
         fontSize: 21,
         spacingAfter: 70,
       });
@@ -798,6 +1090,7 @@ ${body}
       return this.renderDocxParagraph(
         `${block.checked ? '☑' : '☐'} ${block.text}`,
         {
+          color: TEMPLATE_DARK,
           fontSize: 21,
           spacingAfter: 70,
         },
@@ -809,6 +1102,7 @@ ${body}
     }
 
     return this.renderDocxParagraph(block.text, {
+      color: TEMPLATE_DARK,
       fontSize: 21,
       justify: true,
       spacingAfter: 90,
@@ -822,7 +1116,9 @@ ${body}
       bullet?: boolean;
       color?: string;
       fontSize?: number;
+      align?: 'left' | 'center' | 'both';
       justify?: boolean;
+      indentLeft?: number;
       spacingBefore?: number;
       spacingAfter?: number;
       bottomBorder?: boolean;
@@ -833,10 +1129,18 @@ ${body}
       `<w:spacing w:before="${options.spacingBefore ?? 0}" w:after="${
         options.spacingAfter ?? 80
       }" w:line="276" w:lineRule="auto"/>`,
-      options.justify ? '<w:jc w:val="both"/>' : '',
-      options.bullet ? '<w:ind w:left="360" w:hanging="180"/>' : '',
+      options.align
+        ? `<w:jc w:val="${options.align}"/>`
+        : options.justify
+          ? '<w:jc w:val="both"/>'
+          : '',
+      options.bullet
+        ? '<w:ind w:left="360" w:hanging="180"/>'
+        : options.indentLeft
+          ? `<w:ind w:left="${options.indentLeft}"/>`
+          : '',
       options.bottomBorder
-        ? '<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="FCA5A5"/></w:pBdr>'
+        ? `<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="${TEMPLATE_TABLE_BORDER}"/></w:pBdr>`
         : '',
     ].join('');
     const bulletPrefix = options.bullet ? '• ' : '';
@@ -845,7 +1149,7 @@ ${body}
       `${bulletPrefix}${text}`,
       {
         bold: options.bold,
-        color: options.color ?? '1E293B',
+        color: options.color ?? TEMPLATE_DARK,
         size,
       },
     )}</w:p>`;
@@ -858,7 +1162,7 @@ ${body}
     return this.parseInlineSegments(text)
       .map((segment) => {
         const runProperties = [
-          '<w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:cs="Aptos"/>',
+          '<w:rFonts w:ascii="Frutiger" w:hAnsi="Frutiger" w:cs="Frutiger"/>',
           options.bold || segment.bold ? '<w:b/><w:bCs/>' : '',
           `<w:color w:val="${options.color}"/>`,
           `<w:sz w:val="${options.size}"/><w:szCs w:val="${options.size}"/>`,
@@ -872,7 +1176,9 @@ ${body}
       .join('');
   }
 
-  private parseInlineSegments(text: string): Array<{ text: string; bold: boolean }> {
+  private parseInlineSegments(
+    text: string,
+  ): Array<{ text: string; bold: boolean }> {
     const segments: Array<{ text: string; bold: boolean }> = [];
     const pattern = /\*\*([^*\n]+)\*\*/g;
     let cursor = 0;
@@ -922,7 +1228,7 @@ ${body}
         (row) =>
           `<w:tr>${this.renderDocxTableCell(row.label, {
             bold: true,
-            fill: 'FEF2F2',
+            fill: TEMPLATE_TABLE_FILL,
             width: 3000,
           })}${this.renderDocxTableCell(row.value, {
             width: 5900,
@@ -930,7 +1236,7 @@ ${body}
       )
       .join('');
 
-    return `<w:tbl><w:tblPr><w:tblW w:w="8900" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="FECACA"/><w:left w:val="single" w:sz="4" w:color="FECACA"/><w:bottom w:val="single" w:sz="4" w:color="FECACA"/><w:right w:val="single" w:sz="4" w:color="FECACA"/><w:insideH w:val="single" w:sz="4" w:color="FECACA"/><w:insideV w:val="single" w:sz="4" w:color="FECACA"/></w:tblBorders><w:tblCellMar><w:top w:w="120" w:type="dxa"/><w:left w:w="160" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="160" w:type="dxa"/></w:tblCellMar></w:tblPr>${tableRows}</w:tbl>`;
+    return `<w:tbl><w:tblPr><w:tblW w:w="8900" w:type="dxa"/><w:jc w:val="center"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="${TEMPLATE_TABLE_BORDER}"/><w:left w:val="single" w:sz="4" w:color="${TEMPLATE_TABLE_BORDER}"/><w:bottom w:val="single" w:sz="4" w:color="${TEMPLATE_TABLE_BORDER}"/><w:right w:val="single" w:sz="4" w:color="${TEMPLATE_TABLE_BORDER}"/><w:insideH w:val="single" w:sz="4" w:color="${TEMPLATE_TABLE_BORDER}"/><w:insideV w:val="single" w:sz="4" w:color="${TEMPLATE_TABLE_BORDER}"/></w:tblBorders><w:tblCellMar><w:top w:w="120" w:type="dxa"/><w:left w:w="160" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="160" w:type="dxa"/></w:tblCellMar></w:tblPr>${tableRows}</w:tbl>`;
   }
 
   private renderDocxTableCell(
@@ -942,6 +1248,7 @@ ${body}
       text,
       {
         bold: options.bold,
+        color: options.bold ? TEMPLATE_DARK_BLUE : TEMPLATE_DARK,
         fontSize: 20,
         spacingAfter: 0,
       },
@@ -1122,14 +1429,16 @@ ${body}
       .replace(/'/g, '&apos;');
   }
 
-  private zipStore(files: Array<{ name: string; content: string }>): Buffer {
+  private zipStore(files: DocxZipFile[]): Buffer {
     const localParts: Buffer[] = [];
     const centralParts: Buffer[] = [];
     let offset = 0;
 
     for (const file of files) {
       const name = Buffer.from(file.name);
-      const data = Buffer.from(file.content);
+      const data = Buffer.isBuffer(file.content)
+        ? file.content
+        : Buffer.from(file.content);
       const crc = this.crc32(data);
       const local = Buffer.alloc(30);
       local.writeUInt32LE(0x04034b50, 0);
