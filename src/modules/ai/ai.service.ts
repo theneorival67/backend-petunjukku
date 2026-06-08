@@ -62,6 +62,7 @@ export class AiService {
 
   status() {
     const cfg = this.configService.get('ai', { infer: true })!;
+
     return {
       enabled: this.isEnabled(),
       configured: Boolean(cfg.aiServiceBaseUrl),
@@ -911,6 +912,7 @@ export class AiService {
       project.school?.environmentScans?.[0] ??
       project.teacherProfile.school?.environmentScans?.[0] ??
       null;
+    const school = project.school ?? project.teacherProfile.school;
 
     return {
       user: {
@@ -939,9 +941,48 @@ export class AiService {
         teachingExperienceYears: project.teacherProfile.teachingExperienceYears,
         teachingContext: project.teacherProfile.teachingContext,
       },
-      school: project.school,
-      teacherSubject: project.teacherSubject,
-      teacherClass: project.teacherClass,
+      school: school
+        ? {
+            id: school.id,
+            name: school.name,
+            province: school.province,
+            city: school.city,
+            district: school.district,
+            address: school.address,
+            schoolEnvironment: school.schoolEnvironment,
+            availableFacilities: this.toStringList(school.availableFacilities),
+            localContext: school.localContext,
+          }
+        : {},
+      teacherSubject: project.teacherSubject
+        ? {
+            id: project.teacherSubject.id,
+            subjectName: project.teacherSubject.subjectName,
+            phase: project.teacherSubject.phase ?? project.phase,
+            gradeLevel: project.teacherSubject.gradeLevel ?? project.gradeLevel,
+          }
+        : {
+            subjectName: project.subject,
+            phase: project.phase,
+            gradeLevel: project.gradeLevel,
+          },
+      teacherClass: project.teacherClass
+        ? {
+            id: project.teacherClass.id,
+            className: project.teacherClass.className,
+            gradeLevel: project.teacherClass.gradeLevel ?? project.gradeLevel,
+            academicYear: project.teacherClass.academicYear,
+            studentCount: project.teacherClass.studentCount,
+            studentCharacteristics:
+              project.teacherClass.studentCharacteristics,
+            learningChallenges: this.toStringList(
+              project.teacherClass.learningChallenges,
+            ),
+            dominantLearningStyle: project.teacherClass.dominantLearningStyle,
+          }
+        : {
+            gradeLevel: project.gradeLevel,
+          },
       stages: project.stages.map((stage) => ({
         stageNumber: stage.stageNumber,
         stageName: stage.stageName,

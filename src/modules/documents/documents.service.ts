@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ExportFileType } from '@prisma/client';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
@@ -7,6 +7,8 @@ import { SupabaseService } from '../../supabase/supabase.service';
 
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger(DocumentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
@@ -54,6 +56,7 @@ export class DocumentsService {
     const filePath = `${user.id}/${generated.rppProjectId}/${fileName}`;
     const bucket =
       this.configService.get<string>('storage.bucketDocuments') ?? 'documents';
+    await this.ensureBucket(bucket);
 
     const { error } = await this.supabaseService
       .getAdminClient()
@@ -121,23 +124,68 @@ export class DocumentsService {
     return `# ${title}\n\n\`\`\`json\n${JSON.stringify(contentJson, null, 2)}\n\`\`\`\n`;
   }
 
+  private async ensureBucket(bucket: string) {
+    const storage = this.supabaseService.getAdminClient().storage;
+    const existing = await storage.getBucket(bucket);
+
+    if (!existing.error) {
+      return;
+    }
+
+    const created = await storage.createBucket(bucket, {
+      public: true,
+      fileSizeLimit:
+        (this.configService.get<number>('storage.maxFileSizeMb') ?? 10) *
+        1024 *
+        1024,
+    });
+
+    if (created.error && !/already exists/i.test(created.error.message)) {
+      this.logger.error(
+        `Gagal membuat bucket dokumen "${bucket}": ${created.error.message}`,
+      );
+      throw new Error(
+        `Gagal membuat bucket dokumen "${bucket}": ${created.error.message}`,
+      );
+    }
+  }
+
   private renderPdf(title: string, markdown: string): Buffer {
     const lines = [title, '', ...markdown.replace(/\r/g, '').split('\n')]
       .flatMap((line) => this.wrapLine(line, 86))
-      .slice(0, 52);
-    const escaped = lines
-      .map((line, index) => {
-        const y = 780 - index * 14;
-        return `BT /F1 10 Tf 40 ${y} Td (${this.escapePdf(line)}) Tj ET`;
-      })
-      .join('\n');
-    const objects = [
+      .flatMap((line) => (line.trim() ? [line] : [' ']));
+    const linesPerPage = 52;
+    const pages = Array.from(
+      { length: Math.max(1, Math.ceil(lines.length / linesPerPage)) },
+      (_, index) =>
+        lines.slice(index * linesPerPage, (index + 1) * linesPerPage),
+    );
+    const objects: string[] = [
       '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
-      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
-      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj',
-      '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
-      `5 0 obj << /Length ${Buffer.byteLength(escaped)} >> stream\n${escaped}\nendstream endobj`,
+      `2 0 obj << /Type /Pages /Kids [${pages
+        .map((_, index) => `${4 + index * 2} 0 R`)
+        .join(' ')}] /Count ${pages.length} >> endobj`,
+      '3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
     ];
+
+    for (const [pageIndex, pageLines] of pages.entries()) {
+      const pageObjectId = 4 + pageIndex * 2;
+      const contentObjectId = pageObjectId + 1;
+      const escaped = pageLines
+        .map((line, index) => {
+          const y = 780 - index * 14;
+          return `BT /F1 10 Tf 40 ${y} Td (${this.escapePdf(line)}) Tj ET`;
+        })
+        .join('\n');
+
+      objects.push(
+        `${pageObjectId} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectId} 0 R >> endobj`,
+        `${contentObjectId} 0 obj << /Length ${Buffer.byteLength(
+          escaped,
+        )} >> stream\n${escaped}\nendstream endobj`,
+      );
+    }
+
     let pdf = '%PDF-1.4\n';
     const offsets = [0];
     for (const object of objects) {
