@@ -13,6 +13,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
+import { LintasDisiplinRecommendationResponseDto } from './dto/lintas-disiplin-recommendation.dto';
 import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { RppService } from './rpp.service';
 
@@ -55,6 +56,24 @@ export class RppController {
     @Param('stageNumber') stageNumber: string,
   ): Promise<StageRecommendationResponseDto> {
     return this.rppService.recommendStage(user, projectId, Number(stageNumber));
+  }
+
+  @ApiOperation({
+    summary: 'Rekomendasi 5 mata pelajaran lintas disiplin dari AI',
+    description:
+      'Mengambil konteks Stage 1 dari database lalu meminta FastAPI merekomendasikan 5 mapel lintas disiplin yang relevan.',
+  })
+  @Post(':projectId/ai/lintas-disiplin/recommend')
+  recommendLintasDisiplin(
+    @CurrentUser() user: AuthUser,
+    @Param('projectId') projectId: string,
+    @Body() body: { profilLulusan?: string[] },
+  ): Promise<LintasDisiplinRecommendationResponseDto> {
+    return this.rppService.recommendLintasDisiplin(
+      user,
+      projectId,
+      body?.profilLulusan ?? [],
+    );
   }
 
   @ApiOperation({ summary: 'Update project RPP' })

@@ -9,6 +9,7 @@ import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { AiGatewayService } from '../rag/ai-gateway.service';
 import { UsersService } from '../users/users.service';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
+import { LintasDisiplinRecommendationResponseDto } from './dto/lintas-disiplin-recommendation.dto';
 import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
 
@@ -518,6 +519,91 @@ export class RppService {
 
     return this.aiGateway.postInternal<StageRecommendationResponseDto>(
       'internal/ai/recommend-stage',
+      payload,
+    );
+  }
+
+  async recommendLintasDisiplin(
+    user: AuthUser,
+    projectId: string,
+    profilLulusan: string[] = [],
+  ): Promise<LintasDisiplinRecommendationResponseDto> {
+    await this.usersService.syncSupabaseUser(user);
+
+    const project = await this.prisma.rppProject.findFirst({
+      where: { id: projectId, userId: user.id },
+      include: {
+        teacherProfile: {
+          include: { school: true },
+        },
+        school: true,
+        teacherClass: true,
+        stages: {
+          orderBy: { stageNumber: 'asc' },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project RPP tidak ditemukan.');
+    }
+
+    if (project.rppType !== RppType.intrakurikuler) {
+      throw new BadRequestException(
+        'Rekomendasi lintas disiplin saat ini hanya tersedia untuk RPP intrakurikuler.',
+      );
+    }
+
+    const payload = {
+      project: {
+        id: project.id,
+        title: project.title,
+        rppType: project.rppType,
+        subject: project.subject,
+        phase: project.phase,
+        gradeLevel: project.gradeLevel,
+        topic: project.topic,
+      },
+      teacherProfile: {
+        fullName: project.teacherProfile.fullName,
+        position: project.teacherProfile.position,
+        educationLevel: project.teacherProfile.educationLevel,
+      },
+      school: project.school
+        ? {
+            name: project.school.name,
+            province: project.school.province,
+            city: project.school.city,
+            schoolEnvironment: project.school.schoolEnvironment,
+            localContext: project.school.localContext,
+          }
+        : null,
+      teacherClass: project.teacherClass
+        ? {
+            className: project.teacherClass.className,
+            gradeLevel: project.teacherClass.gradeLevel,
+            studentCount: project.teacherClass.studentCount,
+            studentCharacteristics:
+              project.teacherClass.studentCharacteristics,
+          }
+        : null,
+      previousStages: project.stages
+        .filter((stage) => stage.stageNumber < 2)
+        .map((stage) => ({
+          stageNumber: stage.stageNumber,
+          stageName: stage.stageName,
+          contentJson: this.toJsonObject(stage.contentJson),
+          isCompleted: stage.isCompleted,
+        })),
+      profilLulusan,
+      options: {
+        language: 'id',
+        outputFormat: 'json',
+      },
+    };
+
+    return this.aiGateway.postInternal<LintasDisiplinRecommendationResponseDto>(
+      'internal/ai/recommend-lintas-disiplin',
       payload,
     );
   }

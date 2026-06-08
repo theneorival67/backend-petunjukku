@@ -42,6 +42,15 @@ type PdfLine = {
   gapAfter: number;
 };
 
+type PdfCoverImage = {
+  width: number;
+  height: number;
+  colorSpace: 'DeviceGray' | 'DeviceRGB';
+  colors: 1 | 3;
+  bitsPerComponent: number;
+  data: Buffer;
+};
+
 type DocxZipFile = { name: string; content: string | Buffer };
 
 const DOCX_PAGE_WIDTH_TWIPS = 11906;
@@ -243,18 +252,47 @@ export class DocumentsService {
       y -= line.lineHeight + line.gapAfter;
     }
 
-    const objects: string[] = [
-      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
-      `2 0 obj << /Type /Pages /Kids [${pages
-        .map((_, index) => `${5 + index * 2} 0 R`)
-        .join(' ')}] /Count ${pages.length} >> endobj`,
-      '3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
-      '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj',
-    ];
+    const coverImage = this.loadPdfCoverImage();
+    const objects = new Map<number, Buffer>();
+    const pageObjectIds: number[] = [];
+    let nextObjectId = 5;
 
-    for (const [pageIndex, pageLines] of pages.entries()) {
-      const pageObjectId = 5 + pageIndex * 2;
-      const contentObjectId = pageObjectId + 1;
+    if (coverImage) {
+      const imageObjectId = nextObjectId++;
+      const coverPageObjectId = nextObjectId++;
+      const coverContentObjectId = nextObjectId++;
+      pageObjectIds.push(coverPageObjectId);
+
+      objects.set(
+        imageObjectId,
+        this.pdfStreamObject(
+          imageObjectId,
+          `<< /Type /XObject /Subtype /Image /Width ${coverImage.width} /Height ${coverImage.height} /ColorSpace /${coverImage.colorSpace} /BitsPerComponent ${coverImage.bitsPerComponent} /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors ${coverImage.colors} /BitsPerComponent ${coverImage.bitsPerComponent} /Columns ${coverImage.width} >> /Interpolate true /Length ${coverImage.data.length} >>`,
+          coverImage.data,
+        ),
+      );
+      const coverContent = this.renderPdfCoverContent(title, identityOverrides);
+      objects.set(
+        coverContentObjectId,
+        this.pdfStreamObject(
+          coverContentObjectId,
+          `<< /Length ${coverContent.length} >>`,
+          coverContent,
+        ),
+      );
+      objects.set(
+        coverPageObjectId,
+        this.pdfObject(
+          coverPageObjectId,
+          `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> /XObject << /ImCover ${imageObjectId} 0 R >> >> /Contents ${coverContentObjectId} 0 R >>`,
+        ),
+      );
+    }
+
+    for (const pageLines of pages) {
+      const pageObjectId = nextObjectId++;
+      const contentObjectId = nextObjectId++;
+      pageObjectIds.push(pageObjectId);
       const escaped = pageLines
         .map(({ line, y }) => {
           const x = 42 + line.indent;
@@ -264,27 +302,58 @@ export class DocumentsService {
         })
         .join('\n');
 
-      objects.push(
-        `${pageObjectId} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjectId} 0 R >> endobj`,
-        `${contentObjectId} 0 obj << /Length ${Buffer.byteLength(
-          escaped,
-        )} >> stream\n${escaped}\nendstream endobj`,
+      objects.set(
+        pageObjectId,
+        this.pdfObject(
+          pageObjectId,
+          `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjectId} 0 R >>`,
+        ),
+      );
+      objects.set(
+        contentObjectId,
+        this.pdfStreamObject(
+          contentObjectId,
+          `<< /Length ${Buffer.byteLength(escaped)} >>`,
+          Buffer.from(escaped),
+        ),
       );
     }
 
-    let pdf = '%PDF-1.4\n';
-    const offsets = [0];
-    for (const object of objects) {
-      offsets.push(Buffer.byteLength(pdf));
-      pdf += `${object}\n`;
-    }
-    const xrefOffset = Buffer.byteLength(pdf);
-    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-    for (const offset of offsets.slice(1)) {
-      pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
-    }
-    pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-    return Buffer.from(pdf);
+    objects.set(1, this.pdfObject(1, '<< /Type /Catalog /Pages 2 0 R >>'));
+    objects.set(
+      2,
+      this.pdfObject(
+        2,
+        `<< /Type /Pages /Kids [${pageObjectIds
+          .map((objectId) => `${objectId} 0 R`)
+          .join(' ')}] /Count ${pageObjectIds.length} >>`,
+      ),
+    );
+    objects.set(
+      3,
+      this.pdfObject(
+        3,
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      ),
+    );
+    objects.set(
+      4,
+      this.pdfObject(
+        4,
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+      ),
+    );
+
+    return this.buildPdfBuffer(
+      Array.from({ length: nextObjectId - 1 }, (_, index) => {
+        const objectId = index + 1;
+        const object = objects.get(objectId);
+        if (!object) {
+          throw new Error(`Objek PDF ${objectId} tidak ditemukan.`);
+        }
+        return object;
+      }),
+    );
   }
 
   private renderDocx(
@@ -345,8 +414,13 @@ ${body}
 
   private loadCoverImage(): Buffer | undefined {
     const candidates = [
-      resolve(process.cwd(), '../cover.png'),
+      resolve(__dirname, 'assets/cover.png'),
+      resolve(process.cwd(), 'src/modules/documents/assets/cover.png'),
+      resolve(process.cwd(), 'dist/src/modules/documents/assets/cover.png'),
+      resolve(process.cwd(), 'dist/modules/documents/assets/cover.png'),
+      resolve(process.cwd(), 'assets/documents/cover.png'),
       resolve(process.cwd(), 'cover.png'),
+      resolve(process.cwd(), '../cover.png'),
     ];
     const coverPath = candidates.find(
       (candidate) => candidate.endsWith('.png') && existsSync(candidate),
@@ -354,12 +428,201 @@ ${body}
 
     if (!coverPath) {
       this.logger.warn(
-        'cover.png tidak ditemukan. DOCX dibuat tanpa cover image.',
+        'cover.png tidak ditemukan. Dokumen dibuat tanpa cover image.',
       );
       return undefined;
     }
 
     return readFileSync(coverPath);
+  }
+
+  private loadPdfCoverImage(): PdfCoverImage | undefined {
+    const coverImage = this.loadCoverImage();
+    if (!coverImage) {
+      return undefined;
+    }
+
+    const parsed = this.parsePngForPdf(coverImage);
+    if (!parsed) {
+      this.logger.warn(
+        'cover.png tidak bisa dipakai untuk PDF. Format PNG yang didukung: grayscale/RGB 8-bit non-interlaced.',
+      );
+      return undefined;
+    }
+
+    return parsed;
+  }
+
+  private parsePngForPdf(buffer: Buffer): PdfCoverImage | undefined {
+    const pngSignature = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    if (
+      buffer.length < pngSignature.length ||
+      !buffer.subarray(0, 8).equals(pngSignature)
+    ) {
+      return undefined;
+    }
+
+    let offset = 8;
+    let width = 0;
+    let height = 0;
+    let bitsPerComponent = 0;
+    let colorType = -1;
+    let compressionMethod = -1;
+    let filterMethod = -1;
+    let interlaceMethod = -1;
+    const idatParts: Buffer[] = [];
+
+    while (offset + 8 <= buffer.length) {
+      const length = buffer.readUInt32BE(offset);
+      const type = buffer.toString('ascii', offset + 4, offset + 8);
+      const dataStart = offset + 8;
+      const dataEnd = dataStart + length;
+      if (dataEnd + 4 > buffer.length) {
+        return undefined;
+      }
+
+      if (type === 'IHDR') {
+        width = buffer.readUInt32BE(dataStart);
+        height = buffer.readUInt32BE(dataStart + 4);
+        bitsPerComponent = buffer[dataStart + 8];
+        colorType = buffer[dataStart + 9];
+        compressionMethod = buffer[dataStart + 10];
+        filterMethod = buffer[dataStart + 11];
+        interlaceMethod = buffer[dataStart + 12];
+      }
+
+      if (type === 'IDAT') {
+        idatParts.push(buffer.subarray(dataStart, dataEnd));
+      }
+
+      if (type === 'IEND') {
+        break;
+      }
+
+      offset = dataEnd + 4;
+    }
+
+    if (
+      !width ||
+      !height ||
+      bitsPerComponent !== 8 ||
+      compressionMethod !== 0 ||
+      filterMethod !== 0 ||
+      interlaceMethod !== 0 ||
+      idatParts.length === 0
+    ) {
+      return undefined;
+    }
+
+    if (colorType === 0) {
+      return {
+        width,
+        height,
+        colorSpace: 'DeviceGray',
+        colors: 1,
+        bitsPerComponent,
+        data: Buffer.concat(idatParts),
+      };
+    }
+
+    if (colorType === 2) {
+      return {
+        width,
+        height,
+        colorSpace: 'DeviceRGB',
+        colors: 3,
+        bitsPerComponent,
+        data: Buffer.concat(idatParts),
+      };
+    }
+
+    return undefined;
+  }
+
+  private renderPdfCoverContent(
+    title: string,
+    identity: Record<string, string>,
+  ): Buffer {
+    const coverTitle = this.coverTitle(title, identity);
+    const educationLevel = this.usableMetadataValue(identity.educationLevel);
+    const gradeLevel = this.usableMetadataValue(identity.gradeLevel);
+    const phase = this.usableMetadataValue(identity.phase);
+    const subject = this.usableMetadataValue(identity.subject);
+    const meetingCount = this.usableMetadataValue(identity.meetingCount);
+    const timeAllocation = this.usableMetadataValue(identity.timeAllocation);
+    const classLabel = gradeLevel
+      ? `${educationLevel || 'Kelas'} ${gradeLevel}`.trim()
+      : [educationLevel, phase].filter(Boolean).join(' - ') || subject || 'RPP';
+    const meetingLabel =
+      meetingCount && timeAllocation
+        ? `${meetingCount} Pertemuan x ${timeAllocation}`
+        : timeAllocation ||
+          (meetingCount ? `${meetingCount} Pertemuan` : 'Pembelajaran');
+    const typeLabel =
+      this.usableMetadataValue(identity.rppType) || 'Intrakurikuler';
+    const titleLines = this.wrapPdfLine(coverTitle, 34).slice(0, 3);
+    const commands = ['q 595 0 0 842 0 0 cm /ImCover Do Q'];
+
+    commands.push(
+      this.pdfCenteredTextCommand(
+        'RPP - Intrakurikuler',
+        710,
+        16,
+        'F2',
+        '0.16 0.36 0.20',
+      ),
+    );
+
+    titleLines.forEach((line, index) => {
+      commands.push(
+        this.pdfCenteredTextCommand(
+          line,
+          674 - index * 32,
+          28,
+          'F2',
+          '0.05 0.08 0.10',
+        ),
+      );
+    });
+
+    const subtitle = [phase || subject || educationLevel, classLabel]
+      .filter(Boolean)
+      .join(' | ');
+    if (subtitle) {
+      commands.push(
+        this.pdfCenteredTextCommand(subtitle, 570, 13, 'F2', '0.10 0.17 0.24'),
+      );
+    }
+
+    commands.push(
+      this.pdfCenteredTextCommand(
+        [meetingLabel, typeLabel].filter(Boolean).join(' | '),
+        546,
+        11,
+        'F1',
+        '0.20 0.25 0.30',
+      ),
+    );
+
+    return Buffer.from(commands.join('\n'));
+  }
+
+  private pdfCenteredTextCommand(
+    text: string,
+    y: number,
+    size: number,
+    font: 'F1' | 'F2',
+    color: string,
+  ): string {
+    const cleaned = this.cleanInlineText(text);
+    const estimatedWidth = cleaned.length * size * 0.52;
+    const x = Math.max(42, (595 - estimatedWidth) / 2);
+
+    return `BT ${color} rg /${font} ${size} Tf ${x.toFixed(2)} ${y} Td (${this.escapePdf(
+      cleaned,
+    )}) Tj ET`;
   }
 
   private renderDocxCover(
@@ -1411,6 +1674,44 @@ ${body}
       chunks.push(line.slice(i, i + width));
     }
     return chunks;
+  }
+
+  private pdfObject(id: number, body: string): Buffer {
+    return Buffer.from(`${id} 0 obj ${body} endobj\n`);
+  }
+
+  private pdfStreamObject(
+    id: number,
+    dictionary: string,
+    stream: Buffer,
+  ): Buffer {
+    return Buffer.concat([
+      Buffer.from(`${id} 0 obj ${dictionary} stream\n`),
+      stream,
+      Buffer.from('\nendstream endobj\n'),
+    ]);
+  }
+
+  private buildPdfBuffer(objects: Buffer[]): Buffer {
+    const header = Buffer.from('%PDF-1.4\n');
+    const parts: Buffer[] = [header];
+    const offsets: number[] = [];
+    let offset = header.length;
+
+    for (const object of objects) {
+      offsets.push(offset);
+      parts.push(object);
+      offset += object.length;
+    }
+
+    const xrefOffset = offset;
+    let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+    for (const objectOffset of offsets) {
+      xref += `${String(objectOffset).padStart(10, '0')} 00000 n \n`;
+    }
+    xref += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+    return Buffer.concat([...parts, Buffer.from(xref)]);
   }
 
   private escapePdf(value: string): string {
