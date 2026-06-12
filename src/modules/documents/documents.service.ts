@@ -1,8 +1,16 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ExportFileType, Prisma } from '@prisma/client';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+import { execFile } from 'child_process';
+import { existsSync, promises as fs, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join, resolve } from 'path';
+import { promisify } from 'util';
 import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseService } from '../../supabase/supabase.service';
@@ -53,6 +61,20 @@ type PdfCoverImage = {
 
 type DocxZipFile = { name: string; content: string | Buffer };
 
+type LkpdDocumentData = {
+  title: string;
+  schoolName: string;
+  classSemester: string;
+  material: string;
+  timeAllocation: string;
+  indicators: string[];
+  objectives: string[];
+  instructions: string[];
+  supportingInformation: string[];
+  workSteps: string[];
+  questions: string[];
+};
+
 const DOCX_PAGE_WIDTH_TWIPS = 11906;
 const DOCX_PAGE_HEIGHT_TWIPS = 16838;
 const DOCX_PAGE_WIDTH_EMU = DOCX_PAGE_WIDTH_TWIPS * 635;
@@ -65,6 +87,7 @@ const TEMPLATE_GOLD = 'D18A4B';
 const TEMPLATE_ORANGE = 'F28C38';
 const TEMPLATE_TABLE_BORDER = 'DDE7E2';
 const TEMPLATE_TABLE_FILL = 'F7F9F8';
+const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class DocumentsService {
@@ -80,6 +103,7 @@ export class DocumentsService {
     user: AuthUser,
     generatedRppId: string,
     fileType: ExportFileType,
+    documentKind: 'rpp' | 'lkpd' = 'rpp',
   ) {
     const generated = await this.prisma.generatedRpp.findFirst({
       where: {
@@ -106,6 +130,15 @@ export class DocumentsService {
       throw new NotFoundException('Generated RPP tidak ditemukan.');
     }
 
+    if (
+      documentKind === 'lkpd' &&
+      generated.rppProject.rppType !== 'intrakurikuler'
+    ) {
+      throw new BadRequestException(
+        'Dokumen LKPD saat ini hanya tersedia untuk RPP intrakurikuler.',
+      );
+    }
+
     const title = generated.rppProject.title;
     const markdown =
       generated.contentMarkdown ||
@@ -114,10 +147,18 @@ export class DocumentsService {
       generated.rppProject,
       generated.createdAt,
     );
+    const lkpdData =
+      documentKind === 'lkpd'
+        ? this.buildLkpdDocumentData(generated.contentJson, identityOverrides)
+        : undefined;
     const buffer =
-      fileType === ExportFileType.pdf
-        ? this.renderPdf(title, markdown, identityOverrides)
-        : this.renderDocx(title, markdown, identityOverrides);
+      documentKind === 'lkpd' && lkpdData
+        ? fileType === ExportFileType.pdf
+          ? await this.renderLkpdPdf(lkpdData)
+          : this.renderLkpdDocx(lkpdData)
+        : fileType === ExportFileType.pdf
+          ? this.renderPdf(title, markdown, identityOverrides)
+          : this.renderDocx(title, markdown, identityOverrides);
     const extension = fileType === ExportFileType.pdf ? 'pdf' : 'docx';
     const mimeType =
       fileType === ExportFileType.pdf
@@ -128,7 +169,9 @@ export class DocumentsService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 60);
-    const fileName = `${safeTitle || 'rpp'}-${Date.now()}.${extension}`;
+    const fileName = `${documentKind === 'lkpd' ? 'lkpd-' : ''}${
+      safeTitle || 'rpp'
+    }-${Date.now()}.${extension}`;
     const filePath = `${user.id}/${generated.rppProjectId}/${fileName}`;
     const bucket =
       this.configService.get<string>('storage.bucketDocuments') ?? 'documents';
@@ -410,6 +453,512 @@ ${body}
       },
     ];
     return this.zipStore(files);
+  }
+
+  private buildLkpdDocumentData(
+    contentJson: unknown,
+    identityOverrides: Record<string, string>,
+  ): LkpdDocumentData {
+    const content = this.recordValue(contentJson);
+    const identity = this.recordValue(content.identity);
+    const direction = this.recordValue(content.profileAndLearningDirection);
+    const assessment = this.recordValue(content.assessment);
+    const summative = this.recordValue(assessment.summative);
+    const material =
+      this.nonEmptyText(identity.topic) ||
+      this.nonEmptyText(identityOverrides.topic) ||
+      'Materi Pembelajaran';
+    const objectives = this.stringList(direction.learningObjectives);
+    const normalizedObjectives =
+      objectives.length > 0
+        ? objectives
+        : [
+            `Murid mampu menjelaskan konsep utama ${material}.`,
+            `Murid mampu menerapkan ${material} dalam situasi di lingkungan sekitar.`,
+          ];
+    const sampleTasks = this.stringList(summative.sampleTasks);
+    const essentialQuestion = this.nonEmptyText(direction.essentialQuestion);
+
+    return {
+      title: material,
+      schoolName:
+        this.nonEmptyText(identity.schoolName) ||
+        this.nonEmptyText(identityOverrides.schoolName) ||
+        'Satuan Pendidikan',
+      classSemester:
+        this.nonEmptyText(identity.gradeLevel) ||
+        this.nonEmptyText(identityOverrides.gradeLevel) ||
+        'Kelas / Semester',
+      material,
+      timeAllocation:
+        this.nonEmptyText(identity.timeAllocation) ||
+        this.nonEmptyText(identityOverrides.timeAllocation) ||
+        '2 JP',
+      indicators: normalizedObjectives.slice(0, 3),
+      objectives: normalizedObjectives.slice(0, 2),
+      instructions: [
+        'Berdoalah sebelum mulai mengerjakan.',
+        'Bacalah Informasi Pendukung terlebih dahulu.',
+        'Kerjakan bersama kelompokmu dan saling menghargai pendapat.',
+        'Tulis jawaban pada tempat yang tersedia dengan rapi.',
+        'Tanyakan kepada gurumu bila ada yang belum jelas.',
+      ],
+      supportingInformation: [
+        this.nonEmptyText(content.materialContext) ||
+          `${material} berkaitan erat dengan kehidupan sehari-hari. Memahami konsep, penyebab, dampak, dan penerapannya membantu murid mengambil keputusan yang tepat berdasarkan informasi yang tersedia.`,
+        `Bacalah informasi tersebut sebagai bahan untuk mengerjakan soal. Diskusikan hubungan materi dengan situasi di lingkungan sekitar, lalu tuliskan hasil analisismu secara runtut.`,
+      ],
+      workSteps: [
+        'Baca Informasi Pendukung bersama kelompokmu.',
+        `Amati contoh atau situasi yang berkaitan dengan ${material}.`,
+        'Diskusikan jawaban soal-soal di bawah ini.',
+        'Tuliskan hasil diskusi pada tempat yang tersedia.',
+        'Sampaikan hasil kerja kelompokmu di depan kelas.',
+      ],
+      questions: [
+        sampleTasks[0] ||
+          essentialQuestion ||
+          `Jelaskan dengan bahasamu sendiri apa yang dimaksud dengan ${material}.`,
+        sampleTasks[1] ||
+          `Sebutkan tiga contoh yang berkaitan dengan ${material} beserta penjelasannya.`,
+        sampleTasks[2] ||
+          'Berdasarkan informasi pendukung, lengkapi tabel analisis berikut.',
+        sampleTasks[3] ||
+          `Tuliskan satu tindakan atau kesimpulan yang dapat kamu lakukan setelah mempelajari ${material}.`,
+      ],
+    };
+  }
+
+  private recordValue(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private nonEmptyText(value: unknown): string {
+    return typeof value === 'string' && value.trim() ? value.trim() : '';
+  }
+
+  private stringList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item.trim();
+        }
+        const record = this.recordValue(item);
+        return (
+          this.nonEmptyText(record.description) ||
+          this.nonEmptyText(record.prompt)
+        );
+      })
+      .filter(Boolean);
+  }
+
+  private renderLkpdDocx(data: LkpdDocumentData): Buffer {
+    const pageOne = [
+      this.renderLkpdParagraph('LEMBAR KERJA PESERTA DIDIK (LKPD)', {
+        align: 'center',
+        bold: true,
+        color: '163E68',
+        size: 24,
+        spacingAfter: 60,
+      }),
+      this.renderLkpdParagraph(data.title, {
+        align: 'center',
+        bold: true,
+        color: '505A63',
+        size: 18,
+        spacingAfter: 130,
+        bottomBorder: true,
+      }),
+      this.renderLkpdMetadataTable([
+        ['Satuan Pendidikan', data.schoolName],
+        ['Kelas / Semester', data.classSemester],
+        ['Materi Ajar', data.material],
+        ['Alokasi Waktu', data.timeAllocation],
+      ]),
+      this.renderLkpdParagraph('Identitas Murid', {
+        bold: true,
+        spacingBefore: 80,
+        spacingAfter: 40,
+      }),
+      this.renderLkpdStudentIdentityTable(),
+      this.renderLkpdSpacer(180),
+      this.renderLkpdSection(
+        'A',
+        'Indikator Pencapaian Kompetensi',
+        this.renderLkpdNumberedList(data.indicators),
+      ),
+      this.renderLkpdSpacer(130),
+      this.renderLkpdSection(
+        'B',
+        'Tujuan Pembelajaran',
+        this.renderLkpdNumberedList(data.objectives),
+      ),
+      this.renderLkpdSpacer(130),
+      this.renderLkpdSection(
+        'C',
+        'Petunjuk Belajar',
+        data.instructions
+          .map((item) => this.renderLkpdParagraph(`•  ${item}`))
+          .join(''),
+      ),
+      this.renderLkpdSpacer(130),
+      this.renderLkpdSection('D', 'Informasi Pendukung', ''),
+      this.renderDocxPageBreak(),
+    ].join('');
+
+    const pageTwo = [
+      this.renderLkpdBox(
+        data.supportingInformation
+          .map((item, index) =>
+            this.renderLkpdParagraph(item, {
+              bold: index === 1,
+              justify: true,
+              spacingAfter: index === 0 ? 100 : 0,
+            }),
+          )
+          .join(''),
+      ),
+      this.renderLkpdSpacer(180),
+      this.renderLkpdSection(
+        'E',
+        'Langkah-langkah Kerja',
+        this.renderLkpdNumberedList(data.workSteps),
+      ),
+      this.renderLkpdSpacer(180),
+      this.renderLkpdFirstQuestionSection(data.questions[0]),
+      this.renderDocxPageBreak(),
+    ].join('');
+
+    const pageThree = [
+      this.renderLkpdParagraph(`Soal 2. ${data.questions[1]}`, {
+        bold: true,
+        spacingAfter: 40,
+      }),
+      this.renderLkpdAnswerArea(1900),
+      this.renderLkpdSpacer(130),
+      this.renderLkpdParagraph(`Soal 3. ${data.questions[2]}`, {
+        bold: true,
+        spacingAfter: 70,
+      }),
+      this.renderLkpdQuestionTable(),
+      this.renderLkpdSpacer(180),
+      this.renderLkpdParagraph(`Soal 4. ${data.questions[3]}`, {
+        bold: true,
+        spacingAfter: 40,
+      }),
+      this.renderLkpdAnswerArea(2800),
+    ].join('');
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>
+${pageOne}${pageTwo}${pageThree}
+<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgSz w:w="${DOCX_PAGE_WIDTH_TWIPS}" w:h="${DOCX_PAGE_HEIGHT_TWIPS}"/><w:pgMar w:top="720" w:right="900" w:bottom="900" w:left="900" w:header="360" w:footer="420" w:gutter="0"/></w:sectPr>
+</w:body></w:document>`;
+
+    return this.zipStore([
+      {
+        name: '[Content_Types].xml',
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>',
+      },
+      {
+        name: '_rels/.rels',
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+      },
+      {
+        name: 'word/_rels/document.xml.rels',
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>',
+      },
+      {
+        name: 'word/footer1.xml',
+        content: this.renderLkpdFooter(data.title),
+      },
+      {
+        name: 'word/document.xml',
+        content: documentXml,
+      },
+    ]);
+  }
+
+  private async renderLkpdPdf(data: LkpdDocumentData): Promise<Buffer> {
+    const directory = await fs.mkdtemp(join(tmpdir(), 'petunjukku-lkpd-'));
+    const docxPath = join(directory, 'lkpd.docx');
+    const pdfPath = join(directory, 'lkpd.pdf');
+
+    try {
+      await fs.writeFile(docxPath, this.renderLkpdDocx(data));
+      await execFileAsync('libreoffice', [
+        '--headless',
+        '--convert-to',
+        'pdf',
+        '--outdir',
+        directory,
+        docxPath,
+      ]);
+      return await fs.readFile(pdfPath);
+    } catch (error) {
+      this.logger.error(
+        `Gagal merender preview PDF LKPD: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      throw new Error(
+        'Preview PDF LKPD belum bisa dibuat. Pastikan LibreOffice tersedia.',
+      );
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true });
+    }
+  }
+
+  private renderLkpdParagraph(
+    text: string,
+    options: {
+      align?: 'left' | 'center' | 'both';
+      bold?: boolean;
+      bottomBorder?: boolean;
+      color?: string;
+      justify?: boolean;
+      size?: number;
+      spacingBefore?: number;
+      spacingAfter?: number;
+    } = {},
+  ): string {
+    const size = options.size ?? 18;
+    const paragraphProperties = [
+      `<w:spacing w:before="${options.spacingBefore ?? 0}" w:after="${
+        options.spacingAfter ?? 45
+      }" w:line="240" w:lineRule="auto"/>`,
+      options.align
+        ? `<w:jc w:val="${options.align}"/>`
+        : options.justify
+          ? '<w:jc w:val="both"/>'
+          : '',
+      options.bottomBorder
+        ? '<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="1" w:color="000000"/></w:pBdr>'
+        : '',
+    ].join('');
+    const runProperties = [
+      '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>',
+      options.bold ? '<w:b/><w:bCs/>' : '',
+      `<w:color w:val="${options.color ?? '000000'}"/>`,
+      `<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`,
+      '<w:lang w:val="id-ID"/>',
+    ].join('');
+
+    return `<w:p><w:pPr>${paragraphProperties}</w:pPr><w:r><w:rPr>${runProperties}</w:rPr><w:t xml:space="preserve">${this.escapeXml(
+      text,
+    )}</w:t></w:r></w:p>`;
+  }
+
+  private renderLkpdSpacer(height: number): string {
+    return `<w:p><w:pPr><w:spacing w:before="0" w:after="${height}"/></w:pPr></w:p>`;
+  }
+
+  private renderLkpdTable(rows: string, grid: number[], width = 9300): string {
+    return `<w:tbl><w:tblPr><w:tblW w:w="${width}" w:type="dxa"/><w:jc w:val="center"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="B9D6CD"/><w:left w:val="single" w:sz="4" w:color="B9D6CD"/><w:bottom w:val="single" w:sz="4" w:color="B9D6CD"/><w:right w:val="single" w:sz="4" w:color="B9D6CD"/><w:insideH w:val="single" w:sz="4" w:color="B9D6CD"/><w:insideV w:val="single" w:sz="4" w:color="B9D6CD"/></w:tblBorders><w:tblCellMar><w:top w:w="45" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="45" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid
+      .map((item) => `<w:gridCol w:w="${item}"/>`)
+      .join('')}</w:tblGrid>${rows}</w:tbl>`;
+  }
+
+  private renderLkpdCell(
+    content: string,
+    options: {
+      fill?: string;
+      height?: number;
+      width: number;
+    },
+  ): string {
+    return `<w:tc><w:tcPr><w:tcW w:w="${options.width}" w:type="dxa"/>${
+      options.fill ? `<w:shd w:fill="${options.fill}"/>` : ''
+    }${options.height ? `<w:tcMar/><w:vAlign w:val="top"/>` : ''}</w:tcPr>${content}</w:tc>`;
+  }
+
+  private renderLkpdMetadataTable(rows: Array<[string, string]>): string {
+    return this.renderLkpdTable(
+      rows
+        .map(
+          ([label, value]) =>
+            `<w:tr>${this.renderLkpdCell(
+              this.renderLkpdParagraph(label, {
+                bold: true,
+                color: '254664',
+                spacingAfter: 0,
+              }),
+              { fill: 'F4F7F7', width: 4650 },
+            )}${this.renderLkpdCell(
+              this.renderLkpdParagraph(value, { spacingAfter: 0 }),
+              { width: 4650 },
+            )}</w:tr>`,
+        )
+        .join(''),
+      [4650, 4650],
+    );
+  }
+
+  private renderLkpdStudentIdentityTable(): string {
+    const row = (left: string, right: string) =>
+      `<w:tr>${this.renderLkpdCell(
+        this.renderLkpdParagraph(left, {
+          bold: true,
+          color: '254664',
+          spacingAfter: 0,
+        }),
+        { fill: 'F4F7F7', width: 2100 },
+      )}${this.renderLkpdCell(
+        this.renderLkpdParagraph('', { spacingAfter: 0 }),
+        {
+          width: 2550,
+        },
+      )}${this.renderLkpdCell(
+        this.renderLkpdParagraph(right, {
+          bold: true,
+          color: '254664',
+          spacingAfter: 0,
+        }),
+        { fill: 'F4F7F7', width: 1800 },
+      )}${this.renderLkpdCell(
+        this.renderLkpdParagraph('', { spacingAfter: 0 }),
+        {
+          width: 2850,
+        },
+      )}</w:tr>`;
+
+    return this.renderLkpdTable(
+      `${row('Nama', 'Kelas')}${row('No. Absen', 'Kelompok')}`,
+      [2100, 2550, 1800, 2850],
+    );
+  }
+
+  private renderLkpdSection(
+    label: string,
+    title: string,
+    content: string,
+  ): string {
+    const header = this.renderLkpdCell(
+      this.renderLkpdParagraph(`${label}.  ${title}`, {
+        bold: true,
+        color: '254664',
+        spacingAfter: 0,
+      }),
+      { fill: 'EAF5F7', width: 9300 },
+    );
+    const rows = [`<w:tr>${header}</w:tr>`];
+    if (content) {
+      rows.push(
+        `<w:tr>${this.renderLkpdCell(content, { width: 9300 })}</w:tr>`,
+      );
+    }
+    return this.renderLkpdTable(rows.join(''), [9300]);
+  }
+
+  private renderLkpdNumberedList(items: string[]): string {
+    return items
+      .map((item, index) =>
+        this.renderLkpdParagraph(`${index + 1}. ${item}`, {
+          spacingAfter: 55,
+        }),
+      )
+      .join('');
+  }
+
+  private renderLkpdBox(content: string): string {
+    return this.renderLkpdTable(
+      `<w:tr>${this.renderLkpdCell(content, { width: 9300 })}</w:tr>`,
+      [9300],
+    );
+  }
+
+  private renderLkpdAnswerArea(height: number): string {
+    return this.renderLkpdTable(
+      `<w:tr><w:trPr><w:trHeight w:val="${height}" w:hRule="atLeast"/></w:trPr>${this.renderLkpdCell(
+        this.renderLkpdParagraph('', { spacingAfter: 0 }),
+        { height, width: 9300 },
+      )}</w:tr>`,
+      [9300],
+    );
+  }
+
+  private renderLkpdQuestionTable(): string {
+    const header = `<w:tr>${this.renderLkpdCell(
+      this.renderLkpdParagraph('Pertanyaan', {
+        bold: true,
+        color: '315B7D',
+        spacingAfter: 0,
+      }),
+      { fill: 'D9E6F2', width: 4650 },
+    )}${this.renderLkpdCell(
+      this.renderLkpdParagraph('Jawaban', {
+        bold: true,
+        color: '315B7D',
+        spacingAfter: 0,
+      }),
+      { fill: 'D9E6F2', width: 4650 },
+    )}</w:tr>`;
+    const questions = [
+      'Apa informasi utama dari situasi tersebut?',
+      'Apa dampak atau hasil yang dapat disimpulkan?',
+      'Apa dua cara atau solusi yang dapat dilakukan?',
+    ];
+    const rows = questions
+      .map(
+        (question) =>
+          `<w:tr><w:trPr><w:trHeight w:val="900" w:hRule="atLeast"/></w:trPr>${this.renderLkpdCell(
+            this.renderLkpdParagraph(question, { spacingAfter: 0 }),
+            { height: 900, width: 4650 },
+          )}${this.renderLkpdCell(
+            this.renderLkpdParagraph('', { spacingAfter: 0 }),
+            { height: 900, width: 4650 },
+          )}</w:tr>`,
+      )
+      .join('');
+    return this.renderLkpdTable(`${header}${rows}`, [4650, 4650]);
+  }
+
+  private renderLkpdFirstQuestionSection(question: string): string {
+    const header = this.renderLkpdCell(
+      this.renderLkpdParagraph('F.  Soal-soal', {
+        bold: true,
+        color: '254664',
+        spacingAfter: 0,
+      }),
+      { fill: 'EAF5F7', width: 9300 },
+    );
+    const instruction = this.renderLkpdCell(
+      [
+        this.renderLkpdParagraph(
+          'Kerjakan soal berikut pada tempat yang tersedia.',
+          { bold: true, spacingAfter: 100 },
+        ),
+        this.renderLkpdParagraph(`Soal 1. ${question}`, {
+          bold: true,
+          spacingAfter: 0,
+        }),
+      ].join(''),
+      { width: 9300 },
+    );
+    const answer = this.renderLkpdCell(
+      this.renderLkpdParagraph('', { spacingAfter: 0 }),
+      { height: 2600, width: 9300 },
+    );
+
+    return this.renderLkpdTable(
+      `<w:tr>${header}</w:tr><w:tr>${instruction}</w:tr><w:tr><w:trPr><w:trHeight w:val="2600" w:hRule="atLeast"/></w:trPr>${answer}</w:tr>`,
+      [9300],
+    );
+  }
+
+  private renderLkpdFooter(title: string): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="0"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:color w:val="6B7280"/><w:sz w:val="14"/></w:rPr><w:t xml:space="preserve">${this.escapeXml(
+      `LKPD - ${title} | Halaman `,
+    )}</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve">PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`;
   }
 
   private loadCoverImage(): Buffer | undefined {

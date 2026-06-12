@@ -36,6 +36,32 @@ export class DocumentsController {
     return this.documentsService.export(user, generatedRppId, 'docx');
   }
 
+  @Post('export/lkpd/docx/:generatedRppId')
+  @ApiOperation({
+    summary: 'Export asesmen LKPD intrakurikuler ke DOCX',
+    description:
+      'Membuat dokumen LKPD terpisah dari generated RPP dengan layout lembar kerja siap cetak.',
+  })
+  exportLkpdDocx(
+    @CurrentUser() user: AuthUser,
+    @Param('generatedRppId') generatedRppId: string,
+  ) {
+    return this.documentsService.export(user, generatedRppId, 'docx', 'lkpd');
+  }
+
+  @Post('export/lkpd/pdf/:generatedRppId')
+  @ApiOperation({
+    summary: 'Export asesmen LKPD intrakurikuler ke PDF',
+    description:
+      'Merender DOCX LKPD menjadi PDF agar preview sama dengan dokumen unduhan.',
+  })
+  exportLkpdPdf(
+    @CurrentUser() user: AuthUser,
+    @Param('generatedRppId') generatedRppId: string,
+  ) {
+    return this.documentsService.export(user, generatedRppId, 'pdf', 'lkpd');
+  }
+
   @Get('download/:documentId')
   @ApiOperation({
     summary: 'Ambil URL download dokumen',
