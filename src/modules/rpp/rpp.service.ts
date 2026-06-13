@@ -10,6 +10,7 @@ import { AiGatewayService } from '../rag/ai-gateway.service';
 import { UsersService } from '../users/users.service';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
 import { LintasDisiplinRecommendationResponseDto } from './dto/lintas-disiplin-recommendation.dto';
+import { RecommendStageOverrideDto } from './dto/recommend-stage.dto';
 import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
 
@@ -108,6 +109,60 @@ export class RppService {
     }
 
     return [];
+  }
+
+  private normalizeRecommendationStageOverrides(
+    overrides?: RecommendStageOverrideDto,
+  ) {
+    const rawStages: unknown[] = [];
+
+    if (Array.isArray(overrides?.previousStages)) {
+      rawStages.push(...overrides.previousStages);
+    }
+
+    if (overrides?.stage1 && typeof overrides.stage1 === 'object') {
+      rawStages.push({
+        stageNumber: 1,
+        stageName: 'Konteks Dasar Proyek',
+        contentJson: overrides.stage1,
+        isCompleted: true,
+      });
+    }
+
+    return rawStages
+      .map((raw) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          return null;
+        }
+
+        const stage = raw as Record<string, unknown>;
+        const stageNumber = Number(stage.stageNumber);
+        if (!Number.isFinite(stageNumber) || stageNumber < 1 || stageNumber >= 2) {
+          return null;
+        }
+
+        const contentJson = this.toJsonObject(stage.contentJson ?? stage);
+        return {
+          stageNumber,
+          stageName:
+            typeof stage.stageName === 'string'
+              ? stage.stageName
+              : `Stage ${stageNumber}`,
+          contentJson,
+          isCompleted:
+            typeof stage.isCompleted === 'boolean' ? stage.isCompleted : true,
+        };
+      })
+      .filter(
+        (
+          stage,
+        ): stage is {
+          stageNumber: number;
+          stageName: string;
+          contentJson: Record<string, unknown>;
+          isCompleted: boolean;
+        } => Boolean(stage),
+      );
   }
 
   async create(user: AuthUser, dto: CreateRppProjectDto) {
@@ -355,6 +410,7 @@ export class RppService {
     user: AuthUser,
     projectId: string,
     stageNumber: number,
+    overrides?: RecommendStageOverrideDto,
   ): Promise<StageRecommendationResponseDto> {
     if (stageNumber !== 2) {
       throw new BadRequestException(
@@ -401,7 +457,33 @@ export class RppService {
       throw new NotFoundException('Project RPP tidak ditemukan.');
     }
 
-    const stage1 = project.stages.find((stage) => stage.stageNumber === 1);
+    const databasePreviousStages = project.stages
+      .filter((stage) => stage.stageNumber < 2)
+      .map((stage) => ({
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson: this.toJsonObject(stage.contentJson),
+        isCompleted: stage.isCompleted,
+      }));
+    const previousStagesByNumber = new Map<
+      number,
+      {
+        stageNumber: number;
+        stageName: string;
+        contentJson: Record<string, unknown>;
+        isCompleted: boolean;
+      }
+    >();
+    for (const stage of databasePreviousStages) {
+      previousStagesByNumber.set(stage.stageNumber, stage);
+    }
+    for (const stage of this.normalizeRecommendationStageOverrides(overrides)) {
+      previousStagesByNumber.set(stage.stageNumber, stage);
+    }
+    const previousStages = [...previousStagesByNumber.values()].sort(
+      (a, b) => a.stageNumber - b.stageNumber,
+    );
+    const stage1 = previousStages.find((stage) => stage.stageNumber === 1);
     const environmentScan =
       project.school?.environmentScans?.[0] ??
       project.teacherProfile.school?.environmentScans?.[0] ??
@@ -484,14 +566,7 @@ export class RppService {
             dominantLearningStyle: project.teacherClass.dominantLearningStyle,
           }
         : null,
-      previousStages: project.stages
-        .filter((stage) => stage.stageNumber < 2)
-        .map((stage) => ({
-          stageNumber: stage.stageNumber,
-          stageName: stage.stageName,
-          contentJson: this.toJsonObject(stage.contentJson),
-          isCompleted: stage.isCompleted,
-        })),
+      previousStages,
       targetStage,
       options: {
         topK: 5,
@@ -501,7 +576,7 @@ export class RppService {
       stage1: stage1
         ? {
             stageName: stage1.stageName,
-            contentJson: this.toJsonObject(stage1.contentJson),
+            contentJson: stage1.contentJson,
             isCompleted: stage1.isCompleted,
           }
         : null,
