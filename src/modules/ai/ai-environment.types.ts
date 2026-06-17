@@ -9,6 +9,7 @@ export type AiEnvironmentResponseJson = {
   summary?: string;
   places?: Array<{
     id?: string;
+    categoryId?: string;
     category?: string;
     colorKey?: string;
     relevanceNote?: string;

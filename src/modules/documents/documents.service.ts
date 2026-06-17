@@ -157,7 +157,7 @@ export class DocumentsService {
           ? await this.renderLkpdPdf(lkpdData)
           : this.renderLkpdDocx(lkpdData)
         : fileType === ExportFileType.pdf
-          ? this.renderPdf(title, markdown, identityOverrides)
+          ? await this.renderRppPdf(title, markdown, identityOverrides)
           : this.renderDocx(title, markdown, identityOverrides);
     const extension = fileType === ExportFileType.pdf ? 'pdf' : 'docx';
     const mimeType =
@@ -397,6 +397,41 @@ export class DocumentsService {
         return object;
       }),
     );
+  }
+
+  private async renderRppPdf(
+    title: string,
+    markdown: string,
+    identityOverrides: Record<string, string>,
+  ): Promise<Buffer> {
+    const directory = await fs.mkdtemp(join(tmpdir(), 'petunjukku-rpp-'));
+    const docxPath = join(directory, 'rpp.docx');
+    const pdfPath = join(directory, 'rpp.pdf');
+
+    try {
+      await fs.writeFile(
+        docxPath,
+        this.renderDocx(title, markdown, identityOverrides),
+      );
+      await execFileAsync('libreoffice', [
+        '--headless',
+        '--convert-to',
+        'pdf',
+        '--outdir',
+        directory,
+        docxPath,
+      ]);
+      return await fs.readFile(pdfPath);
+    } catch (error) {
+      this.logger.warn(
+        `Preview PDF RPP via LibreOffice gagal, pakai renderer internal: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return this.renderPdf(title, markdown, identityOverrides);
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true });
+    }
   }
 
   private renderDocx(
@@ -1111,12 +1146,14 @@ ${pageOne}${pageTwo}${pageThree}
           (meetingCount ? `${meetingCount} Pertemuan` : 'Pembelajaran');
     const typeLabel =
       this.usableMetadataValue(identity.rppType) || 'Intrakurikuler';
+    const isKokurikuler = /kokurikuler/i.test(typeLabel);
+    const documentLabel = isKokurikuler ? 'RPM KOKURIKULER' : 'RPP - Intrakurikuler';
     const titleLines = this.wrapPdfLine(coverTitle, 34).slice(0, 3);
     const commands = ['q 595 0 0 842 0 0 cm /ImCover Do Q'];
 
     commands.push(
       this.pdfCenteredTextCommand(
-        'RPP - Intrakurikuler',
+        documentLabel,
         710,
         16,
         'F2',
@@ -1196,10 +1233,12 @@ ${pageOne}${pageTwo}${pageThree}
           (meetingCount ? `${meetingCount} Pertemuan` : 'Pembelajaran');
     const typeLabel =
       this.usableMetadataValue(identity.rppType) || 'Intrakurikuler';
+    const isKokurikuler = /kokurikuler/i.test(typeLabel);
+    const documentLabel = isKokurikuler ? 'RPM KOKURIKULER' : 'RPP - Intrakurikuler';
 
     return [
       withImage ? this.renderDocxCoverImage() : '',
-      this.renderDocxParagraph('RPP - Intrakurikuler', {
+      this.renderDocxParagraph(documentLabel, {
         align: 'center',
         bold: true,
         color: TEMPLATE_GREEN,
@@ -1221,11 +1260,18 @@ ${pageOne}${pageTwo}${pageThree}
         fontSize: 40,
         spacingAfter: 420,
       }),
-      this.renderDocxCoverChips([
-        { text: classLabel, fill: '31A94B' },
-        { text: meetingLabel, fill: '2876A8' },
-        { text: typeLabel, fill: TEMPLATE_ORANGE },
-      ]),
+      this.renderDocxCoverChips(
+        isKokurikuler
+          ? [
+              { text: classLabel, fill: TEMPLATE_ORANGE },
+              { text: `Alokasi: ${meetingLabel}`, fill: '9BBB59' },
+            ]
+          : [
+              { text: classLabel, fill: '31A94B' },
+              { text: meetingLabel, fill: '2876A8' },
+              { text: typeLabel, fill: TEMPLATE_ORANGE },
+            ],
+      ),
       this.renderDocxSectionBreak({
         top: 0,
         right: 0,
@@ -1242,10 +1288,12 @@ ${pageOne}${pageTwo}${pageThree}
   private renderDocxCoverChips(
     chips: Array<{ text: string; fill: string }>,
   ): string {
+    const chipWidth = chips.length <= 2 ? 3000 : 2400;
+    const tableWidth = chips.length <= 2 ? 6400 : 7600;
     const cells = chips
       .map(
         (chip) =>
-          `<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/><w:shd w:fill="${chip.fill}"/><w:tcBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/></w:tcBorders></w:tcPr>${this.renderDocxParagraph(
+          `<w:tc><w:tcPr><w:tcW w:w="${chipWidth}" w:type="dxa"/><w:shd w:fill="${chip.fill}"/><w:tcBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/></w:tcBorders></w:tcPr>${this.renderDocxParagraph(
             chip.text,
             {
               align: 'center',
@@ -1258,7 +1306,9 @@ ${pageOne}${pageTwo}${pageThree}
       )
       .join('');
 
-    return `<w:tbl><w:tblPr><w:tblW w:w="7600" w:type="dxa"/><w:jc w:val="center"/><w:tblCellSpacing w:w="220" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid><w:tr>${cells}</w:tr></w:tbl>`;
+    return `<w:tbl><w:tblPr><w:tblW w:w="${tableWidth}" w:type="dxa"/><w:jc w:val="center"/><w:tblCellSpacing w:w="220" w:type="dxa"/></w:tblPr><w:tblGrid>${chips
+      .map(() => `<w:gridCol w:w="${chipWidth}"/>`)
+      .join('')}</w:tblGrid><w:tr>${cells}</w:tr></w:tbl>`;
   }
 
   private renderDocxTableOfContents(blocks: DocumentBlock[]): string {
@@ -1294,9 +1344,14 @@ ${pageOne}${pageTwo}${pageThree}
     identity: Record<string, string>,
   ): string {
     const footerTitle = this.coverTitle(title, identity);
+    const typeLabel =
+      this.usableMetadataValue(identity.rppType) || 'Intrakurikuler';
+    const prefix = /kokurikuler/i.test(typeLabel)
+      ? 'RPP Kokurikuler'
+      : 'RPP Intrakurikuler';
 
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="0"/></w:pPr>${this.renderDocxRuns(
-      `RPP Intrakurikuler - ${footerTitle} | Halaman `,
+      `${prefix} - ${footerTitle} | Halaman `,
       {
         color: '6B7280',
         size: 18,
@@ -1312,6 +1367,9 @@ ${pageOne}${pageTwo}${pageThree}
     const cleaned = fromTopic
       .replace(/[-_]+/g, ' ')
       .replace(/\bintrakurikuler\b/gi, '')
+      .replace(/\bkokurikuler\b/gi, '')
+      .replace(/\bpjbl\b/gi, '')
+      .replace(/\brpm\b/gi, '')
       .replace(/\brpp\b/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
@@ -1527,10 +1585,13 @@ ${pageOne}${pageTwo}${pageThree}
       'educationLevel',
       'phase',
       'gradeLevel',
+      'kokurikulerForm',
       'subject',
+      'relatedSubjects',
       'topic',
       'element',
       'timeAllocation',
+      'finalProduct',
       'meetingCount',
       'academicYear',
       'rppType',
@@ -1619,14 +1680,20 @@ ${pageOne}${pageTwo}${pageThree}
       fase: 'phase',
       gradelevel: 'gradeLevel',
       kelas: 'gradeLevel',
+      kelassemester: 'gradeLevel',
+      bentukkokurikuler: 'kokurikulerForm',
       subject: 'subject',
       matapelajaran: 'subject',
+      matapelajaranmuatanterkait: 'relatedSubjects',
+      muatanterkait: 'relatedSubjects',
       topic: 'topic',
       topik: 'topic',
       element: 'element',
       elemen: 'element',
       timeallocation: 'timeAllocation',
       alokasiwaktu: 'timeAllocation',
+      alokasiwaktutotal: 'timeAllocation',
+      produkakhir: 'finalProduct',
       meetingcount: 'meetingCount',
       jumlahpertemuan: 'meetingCount',
       academicyear: 'academicYear',
@@ -1646,10 +1713,13 @@ ${pageOne}${pageTwo}${pageThree}
       educationLevel: 'Jenjang Pendidikan',
       phase: 'Fase',
       gradeLevel: 'Kelas',
+      kokurikulerForm: 'Bentuk Kokurikuler',
       subject: 'Mata Pelajaran',
+      relatedSubjects: 'Mata Pelajaran/Muatan Terkait',
       topic: 'Topik',
       element: 'Elemen',
       timeAllocation: 'Alokasi Waktu',
+      finalProduct: 'Produk Akhir',
       meetingCount: 'Jumlah Pertemuan',
       academicYear: 'Tahun Ajaran',
       rppType: 'Jenis RPP',

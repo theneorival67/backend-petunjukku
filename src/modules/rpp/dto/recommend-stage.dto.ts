@@ -1,5 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsObject, IsOptional, IsString } from 'class-validator';
+import {
+  Allow,
+  IsArray,
+  IsObject,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class RecommendStageOverrideDto {
   @ApiPropertyOptional({
@@ -27,4 +33,12 @@ export class RecommendStageOverrideDto {
   @IsOptional()
   @IsObject()
   stage1?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    description:
+      'Tema proyek PjBL yang dipilih guru. Jika kosong, AI mengembalikan rekomendasi tema; jika terisi, AI mengembalikan opsi proyek untuk tema tersebut.',
+  })
+  @IsOptional()
+  @Allow()
+  selectedTheme?: string | Record<string, unknown>;
 }

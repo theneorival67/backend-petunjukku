@@ -9,7 +9,12 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { type RawNearbyPlace } from './environment-curate';
+import {
+  ENVIRONMENT_CANDIDATE_LIMIT,
+  buildEnvironmentCategoryGroups,
+  buildNearbyPlaceCandidates,
+  type RawNearbyPlace,
+} from './environment-curate';
 import type { EnvironmentScanDto } from './dto/nearby-place.dto';
 import type { PlaceDetailsDto } from './dto/place-details.dto';
 import type { PlaceSuggestionDto } from './dto/place-suggestion.dto';
@@ -222,7 +227,7 @@ export class PlacesService {
   }): Promise<EnvironmentScanDto> {
     this.assertConfigured();
 
-    const radiusMeters = input.radiusMeters ?? 2000;
+    const radiusMeters = input.radiusMeters ?? 5000;
     let latitude = input.latitude;
     let longitude = input.longitude;
 
@@ -348,6 +353,7 @@ export class PlacesService {
 
     const payload: EnvironmentScanDto = {
       places: curated.places,
+      categoryGroups: buildEnvironmentCategoryGroups(curated.places),
       summary: curated.summary,
       schoolLatitude: input.latitude,
       schoolLongitude: input.longitude,
@@ -396,7 +402,9 @@ export class PlacesService {
       input.placeId?.trim().toLowerCase() ||
       `${input.latitude.toFixed(6)},${input.longitude.toFixed(6)}`;
     const school = input.schoolName?.trim().toLowerCase() || 'school';
-    return ['environment-v1', place, input.radiusMeters, school].join(':');
+    return ['environment-v5-ai500-balanced', place, input.radiusMeters, school].join(
+      ':',
+    );
   }
 
   private parseEnvironmentCachePayload(
@@ -419,8 +427,22 @@ export class PlacesService {
       return null;
     }
 
+    const places = (record.places as Array<Record<string, unknown>>).map(
+      (place) => ({
+        ...(place as unknown as EnvironmentScanDto['places'][number]),
+        categoryId:
+          typeof place.categoryId === 'string' ? place.categoryId : 'umum',
+        relevanceNote:
+          typeof place.relevanceNote === 'string' ? place.relevanceNote : '',
+      }),
+    );
+    const categoryGroups = Array.isArray(record.categoryGroups)
+      ? (record.categoryGroups as EnvironmentScanDto['categoryGroups'])
+      : buildEnvironmentCategoryGroups(places);
+
     return {
-      places: record.places as EnvironmentScanDto['places'],
+      places,
+      categoryGroups,
       summary: record.summary,
       schoolLatitude: record.schoolLatitude,
       schoolLongitude: record.schoolLongitude,
@@ -569,7 +591,7 @@ export class PlacesService {
 
     const params = new URLSearchParams({
       center: `${lat},${lng}`,
-      zoom: '15',
+      zoom: '13',
       size: `${width}x${height}`,
       scale: '2',
       maptype: 'roadmap',
@@ -612,6 +634,97 @@ export class PlacesService {
     longitude: number,
     radiusMeters: number,
   ): Promise<RawNearbyPlace[]> {
+    const categoryTypeGroups = [
+      ['restaurant'],
+      ['cafe'],
+      ['bakery'],
+      ['meal_takeaway'],
+      ['supermarket'],
+      ['grocery_store'],
+      ['convenience_store'],
+      ['store'],
+      ['shopping_mall'],
+      ['market'],
+      ['school'],
+      ['primary_school'],
+      ['secondary_school'],
+      ['university'],
+      ['library'],
+      ['museum'],
+      ['tourist_attraction'],
+      ['historical_landmark'],
+      ['cultural_landmark'],
+      ['park'],
+      ['playground'],
+      ['garden'],
+      ['hospital'],
+      ['pharmacy'],
+      ['doctor'],
+      ['dentist'],
+      ['clinic'],
+      ['mosque'],
+      ['church'],
+      ['hindu_temple'],
+      ['place_of_worship'],
+      ['local_government_office'],
+      ['post_office'],
+      ['police'],
+      ['bank'],
+      ['gym'],
+      ['sports_complex'],
+      ['stadium'],
+    ];
+
+    const requests = [
+      this.fetchNearbySearchPage(latitude, longitude, radiusMeters),
+      ...categoryTypeGroups.map((includedTypes) =>
+        this.fetchNearbySearchPage(
+          latitude,
+          longitude,
+          radiusMeters,
+          includedTypes,
+        ),
+      ),
+    ];
+    const settled = await Promise.allSettled(requests);
+    const firstRejected = settled.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    const merged = new Map<string, RawNearbyPlace>();
+
+    for (const result of settled) {
+      if (result.status !== 'fulfilled') {
+        continue;
+      }
+      for (const place of result.value) {
+        merged.set(place.id, place);
+      }
+    }
+
+    if (merged.size === 0 && firstRejected) {
+      throw firstRejected.reason;
+    }
+
+    return buildNearbyPlaceCandidates(
+      latitude,
+      longitude,
+      [...merged.values()],
+      ENVIRONMENT_CANDIDATE_LIMIT,
+    ).map(
+      ({
+        distanceMeters: _distanceMeters,
+        distanceLabel: _distanceLabel,
+        ...place
+      }) => place,
+    );
+  }
+
+  private async fetchNearbySearchPage(
+    latitude: number,
+    longitude: number,
+    radiusMeters: number,
+    includedTypes?: string[],
+  ): Promise<RawNearbyPlace[]> {
     const res = await fetch(
       'https://places.googleapis.com/v1/places:searchNearby',
       {
@@ -626,6 +739,7 @@ export class PlacesService {
           maxResultCount: 20,
           languageCode: 'id',
           rankPreference: 'DISTANCE',
+          ...(includedTypes ? { includedTypes } : {}),
           locationRestriction: {
             circle: {
               center: { latitude, longitude },
@@ -638,6 +752,12 @@ export class PlacesService {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
+      if (includedTypes) {
+        this.logger.warn(
+          `Google Places kategori ${includedTypes.join(',')} gagal (${res.status})${errText ? `: ${errText.slice(0, 160)}` : ''}`,
+        );
+        return [];
+      }
       throw new BadGatewayException(
         `Google Places nearby gagal (${res.status})${errText ? `: ${errText.slice(0, 200)}` : ''}`,
       );

@@ -20,6 +20,12 @@ export class NearbyPlaceDto {
   category!: string;
 
   @ApiProperty({
+    description: 'ID kategori stabil untuk grouping UI dan konteks AI',
+    example: 'umkm-ekonomi',
+  })
+  categoryId!: string;
+
+  @ApiProperty({
     description: 'Kunci warna untuk UI',
     example: 'emerald',
   })
@@ -55,9 +61,35 @@ export class EnvironmentRiskDto {
   evidence?: string[];
 }
 
+export class EnvironmentCategoryGroupDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  label!: string;
+
+  @ApiProperty()
+  description!: string;
+
+  @ApiProperty()
+  colorKey!: string;
+
+  @ApiProperty()
+  placeCount!: number;
+
+  @ApiProperty({ type: String, isArray: true })
+  learningUses!: string[];
+
+  @ApiProperty({ type: NearbyPlaceDto, isArray: true })
+  places!: NearbyPlaceDto[];
+}
+
 export class EnvironmentScanDto {
   @ApiProperty({ type: NearbyPlaceDto, isArray: true })
   places!: NearbyPlaceDto[];
+
+  @ApiProperty({ type: EnvironmentCategoryGroupDto, isArray: true })
+  categoryGroups!: EnvironmentCategoryGroupDto[];
 
   @ApiProperty({
     description: 'Ringkasan hasil pemindaian untuk guru/AI',

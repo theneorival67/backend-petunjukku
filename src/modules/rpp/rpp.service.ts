@@ -137,7 +137,11 @@ export class RppService {
 
         const stage = raw as Record<string, unknown>;
         const stageNumber = Number(stage.stageNumber);
-        if (!Number.isFinite(stageNumber) || stageNumber < 1 || stageNumber >= 2) {
+        if (
+          !Number.isFinite(stageNumber) ||
+          stageNumber < 1 ||
+          stageNumber >= 2
+        ) {
           return null;
         }
 
@@ -489,9 +493,12 @@ export class RppService {
       project.teacherProfile.school?.environmentScans?.[0] ??
       null;
 
+    const selectedTheme = overrides?.selectedTheme;
     const recommendationType =
       project.rppType === RppType.pjbl_kokurikuler
-        ? 'project_recommendation'
+        ? selectedTheme
+          ? 'project_recommendation'
+          : 'project_theme_recommendation'
         : 'learning_objectives_flow';
     const targetStage = {
       stageNumber: 2,
@@ -501,6 +508,7 @@ export class RppService {
           : 'Fondasi Tujuan Pembelajaran',
       recommendationType,
       topic: project.topic || project.title,
+      ...(selectedTheme ? { selectedTheme } : {}),
     };
 
     const payload = {
@@ -558,8 +566,7 @@ export class RppService {
             gradeLevel: project.teacherClass.gradeLevel,
             academicYear: project.teacherClass.academicYear,
             studentCount: project.teacherClass.studentCount,
-            studentCharacteristics:
-              project.teacherClass.studentCharacteristics,
+            studentCharacteristics: project.teacherClass.studentCharacteristics,
             learningChallenges: this.toStringList(
               project.teacherClass.learningChallenges,
             ),
@@ -572,6 +579,7 @@ export class RppService {
         topK: 5,
         language: 'id',
         outputFormat: 'json',
+        ...(selectedTheme ? { selectedTheme } : {}),
       },
       stage1: stage1
         ? {
@@ -658,8 +666,7 @@ export class RppService {
             className: project.teacherClass.className,
             gradeLevel: project.teacherClass.gradeLevel,
             studentCount: project.teacherClass.studentCount,
-            studentCharacteristics:
-              project.teacherClass.studentCharacteristics,
+            studentCharacteristics: project.teacherClass.studentCharacteristics,
           }
         : null,
       previousStages: project.stages

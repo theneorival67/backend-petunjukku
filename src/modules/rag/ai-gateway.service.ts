@@ -157,6 +157,7 @@ export class AiGatewayService {
       subject: payload.mataPelajaran,
       phase: payload.fase,
       topK: payload.top_k,
+      similarityThreshold: payload.similarity_threshold,
       documentType: 'capaian_pembelajaran',
     });
   }
