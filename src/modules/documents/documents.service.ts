@@ -75,6 +75,85 @@ type LkpdDocumentData = {
   questions: string[];
 };
 
+type IntraFinalTableRow = { label: string; value: string };
+
+type IntraFinalMeeting = {
+  order: number;
+  title: string;
+  intro: string;
+  focus: string;
+  target: string;
+  diagnostic: {
+    step1: string;
+    sampleQuestion: string;
+    answerOptions: string[];
+    correctAnswer: string;
+    step2: string;
+    teacherNotes: string;
+  };
+  understanding: {
+    teacherNotes: string;
+    step4: string;
+    step5: string;
+    triggerQuestions: string[];
+  };
+  applying: {
+    step6: string;
+    supportGroup: string;
+    advancedGroup: string;
+    step7: string;
+    flowSummary: string[];
+    product: string;
+  };
+  reflecting: {
+    description: string;
+    step8: string;
+    questions: string[];
+  };
+  formative: {
+    step9: string;
+    technique: string;
+    indicators: string[];
+    recordFormat: string;
+  };
+};
+
+type IntraFinalDocumentData = {
+  title: string;
+  footerTitle: string;
+  identityRows: IntraFinalTableRow[];
+  materialContext: string;
+  graduateProfiles: IntraFinalTableRow[];
+  interdisciplinaryRows: IntraFinalTableRow[];
+  learningObjectives: string[];
+  essentialQuestion: string;
+  pedagogicalDescription: string;
+  pedagogicalForms: IntraFinalTableRow[];
+  partnershipRows: IntraFinalTableRow[];
+  digitalRows: IntraFinalTableRow[];
+  digitalNotes: string;
+  resourceRows: IntraFinalTableRow[];
+  meetingOverview: string;
+  meetings: IntraFinalMeeting[];
+  summative: {
+    provision: string;
+    description: string;
+    sampleTasks: string[];
+    criteria: string[];
+    achievementLevels: IntraFinalTableRow[];
+  };
+  followUp: {
+    description: string;
+    rows: IntraFinalTableRow[];
+    enrichmentExample: string;
+  };
+  teacherReflection: {
+    description: string;
+    questions: string[];
+  };
+  finalFlowSummary: string;
+};
+
 const DOCX_PAGE_WIDTH_TWIPS = 11906;
 const DOCX_PAGE_HEIGHT_TWIPS = 16838;
 const DOCX_PAGE_WIDTH_EMU = DOCX_PAGE_WIDTH_TWIPS * 635;
@@ -127,7 +206,7 @@ export class DocumentsService {
     });
 
     if (!generated) {
-      throw new NotFoundException('Generated RPP tidak ditemukan.');
+      throw new NotFoundException('RPM yang dihasilkan tidak ditemukan.');
     }
 
     if (
@@ -135,7 +214,7 @@ export class DocumentsService {
       generated.rppProject.rppType !== 'intrakurikuler'
     ) {
       throw new BadRequestException(
-        'Dokumen LKPD saat ini hanya tersedia untuk RPP intrakurikuler.',
+        'Dokumen LKPD saat ini hanya tersedia untuk RPM intrakurikuler.',
       );
     }
 
@@ -151,14 +230,29 @@ export class DocumentsService {
       documentKind === 'lkpd'
         ? this.buildLkpdDocumentData(generated.contentJson, identityOverrides)
         : undefined;
+    const isIntrakurikulerRpp =
+      documentKind === 'rpp' &&
+      generated.rppProject.rppType === 'intrakurikuler';
     const buffer =
       documentKind === 'lkpd' && lkpdData
         ? fileType === ExportFileType.pdf
           ? await this.renderLkpdPdf(lkpdData)
           : this.renderLkpdDocx(lkpdData)
-        : fileType === ExportFileType.pdf
-          ? this.renderPdf(title, markdown, identityOverrides)
-          : this.renderDocx(title, markdown, identityOverrides);
+        : isIntrakurikulerRpp
+          ? fileType === ExportFileType.pdf
+            ? await this.renderIntraFinalPdf(
+                title,
+                generated.contentJson,
+                identityOverrides,
+              )
+            : await this.renderIntraFinalDocxWithUpdatedToc(
+                title,
+                generated.contentJson,
+                identityOverrides,
+              )
+          : fileType === ExportFileType.pdf
+            ? this.renderPdf(title, markdown, identityOverrides)
+            : this.renderDocx(title, markdown, identityOverrides);
     const extension = fileType === ExportFileType.pdf ? 'pdf' : 'docx';
     const mimeType =
       fileType === ExportFileType.pdf
@@ -455,6 +549,897 @@ ${body}
     return this.zipStore(files);
   }
 
+  private renderIntraFinalDocx(
+    title: string,
+    contentJson: unknown,
+    identityOverrides: Record<string, string>,
+  ): Buffer {
+    const data = this.buildIntraFinalDocumentData(
+      title,
+      contentJson,
+      identityOverrides,
+    );
+    const coverImage = this.loadCoverImage();
+    const questionIconImage = this.loadQuestionIconImage();
+    const warningIconImage = this.loadWarningIconImage();
+    const bookIconImage = this.loadBookIconImage();
+    const documentRelationships = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${coverImage ? '<Relationship Id="rIdCoverImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/cover.png"/>' : ''}${questionIconImage ? '<Relationship Id="rIdQuestionIcon" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/questionicon.png"/>' : ''}${warningIconImage ? '<Relationship Id="rIdWarningIcon" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/warningicon.png"/>' : ''}${bookIconImage ? '<Relationship Id="rIdBookIcon" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/bookicon.png"/>' : ''}<Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>`;
+    const body = [
+      this.renderDocxCover(title, identityOverrides, Boolean(coverImage)),
+      this.renderIntraFinalTableOfContents(),
+      this.renderIntraFinalBody(data, {
+        question: Boolean(questionIconImage),
+        warning: Boolean(warningIconImage),
+        book: Boolean(bookIconImage),
+      }),
+    ].join('');
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>
+${body}
+<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgSz w:w="${DOCX_PAGE_WIDTH_TWIPS}" w:h="${DOCX_PAGE_HEIGHT_TWIPS}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1080" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+</w:body></w:document>`;
+
+    const files: DocxZipFile[] = [
+      {
+        name: '[Content_Types].xml',
+        content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${coverImage || questionIconImage || warningIconImage || bookIconImage ? '<Default Extension="png" ContentType="image/png"/>' : ''}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>`,
+      },
+      {
+        name: '_rels/.rels',
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+      },
+      ...(coverImage
+        ? [
+            {
+              name: 'word/media/cover.png',
+              content: coverImage,
+            },
+          ]
+        : []),
+      ...(questionIconImage
+        ? [
+            {
+              name: 'word/media/questionicon.png',
+              content: questionIconImage,
+            },
+          ]
+        : []),
+      ...(warningIconImage
+        ? [
+            {
+              name: 'word/media/warningicon.png',
+              content: warningIconImage,
+            },
+          ]
+        : []),
+      ...(bookIconImage
+        ? [
+            {
+              name: 'word/media/bookicon.png',
+              content: bookIconImage,
+            },
+          ]
+        : []),
+      {
+        name: 'word/_rels/document.xml.rels',
+        content: documentRelationships,
+      },
+      {
+        name: 'word/footer1.xml',
+        content: this.renderIntraFinalFooter(data.footerTitle),
+      },
+      {
+        name: 'word/settings.xml',
+        content: this.renderDocxUpdateFieldsSettings(),
+      },
+      {
+        name: 'word/document.xml',
+        content: documentXml,
+      },
+    ];
+    return this.zipStore(files);
+  }
+
+  private async renderIntraFinalPdf(
+    title: string,
+    contentJson: unknown,
+    identityOverrides: Record<string, string>,
+  ): Promise<Buffer> {
+    const directory = await fs.mkdtemp(join(tmpdir(), 'petunjukku-intra-'));
+    const docxPath = join(directory, 'intra-final.docx');
+    const pdfPath = join(directory, 'intra-final.pdf');
+    const scriptPath = join(directory, 'update-toc-export.py');
+
+    try {
+      await fs.writeFile(
+        docxPath,
+        this.renderIntraFinalDocx(title, contentJson, identityOverrides),
+      );
+      await fs.writeFile(scriptPath, this.renderLibreOfficeTocExportScript());
+      await execFileAsync(
+        'python3',
+        [
+          scriptPath,
+          docxPath,
+          pdfPath,
+          String(20000 + Math.floor(Math.random() * 20000)),
+          'pdf',
+        ],
+        { timeout: 120000 },
+      );
+      return await fs.readFile(pdfPath);
+    } catch (error) {
+      this.logger.error(
+        `Gagal merender PDF RPM intrakurikuler: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      throw new Error(
+        'PDF RPM intrakurikuler belum bisa dibuat. Pastikan LibreOffice tersedia.',
+      );
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true });
+    }
+  }
+
+  private async renderIntraFinalDocxWithUpdatedToc(
+    title: string,
+    contentJson: unknown,
+    identityOverrides: Record<string, string>,
+  ): Promise<Buffer> {
+    const directory = await fs.mkdtemp(join(tmpdir(), 'petunjukku-intra-'));
+    const docxPath = join(directory, 'intra-final.docx');
+    const scriptPath = join(directory, 'update-toc-export.py');
+
+    try {
+      await fs.writeFile(
+        docxPath,
+        this.renderIntraFinalDocx(title, contentJson, identityOverrides),
+      );
+      await fs.writeFile(scriptPath, this.renderLibreOfficeTocExportScript());
+      await execFileAsync(
+        'python3',
+        [
+          scriptPath,
+          docxPath,
+          docxPath,
+          String(20000 + Math.floor(Math.random() * 20000)),
+          'docx',
+        ],
+        { timeout: 120000 },
+      );
+      return await fs.readFile(docxPath);
+    } catch (error) {
+      this.logger.warn(
+        `Gagal memperbarui daftar isi DOCX RPM intrakurikuler: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return this.renderIntraFinalDocx(title, contentJson, identityOverrides);
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true });
+    }
+  }
+
+  private renderLibreOfficeTocExportScript(): string {
+    return String.raw`import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uno
+from com.sun.star.beans import PropertyValue
+
+
+def prop(name, value):
+    item = PropertyValue()
+    item.Name = name
+    item.Value = value
+    return item
+
+
+def connect(port):
+    local_ctx = uno.getComponentContext()
+    resolver = local_ctx.ServiceManager.createInstanceWithContext(
+        "com.sun.star.bridge.UnoUrlResolver",
+        local_ctx,
+    )
+    return resolver.resolve(
+        f"uno:socket,host=127.0.0.1,port={port};urp;StarOffice.ComponentContext"
+    )
+
+
+docx_path = os.path.abspath(sys.argv[1])
+output_path = os.path.abspath(sys.argv[2])
+port = int(sys.argv[3])
+output_kind = sys.argv[4] if len(sys.argv) > 4 else "pdf"
+profile_dir = tempfile.mkdtemp(prefix="lo-profile-")
+proc = subprocess.Popen(
+    [
+        "libreoffice",
+        "--headless",
+        "--invisible",
+        "--nodefault",
+        "--nofirststartwizard",
+        "--nologo",
+        f"-env:UserInstallation={uno.systemPathToFileUrl(profile_dir)}",
+        f"--accept=socket,host=127.0.0.1,port={port};urp;StarOffice.ComponentContext",
+    ],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+
+try:
+    ctx = None
+    last_error = None
+    for _ in range(60):
+        try:
+            ctx = connect(port)
+            break
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.25)
+
+    if ctx is None:
+        raise RuntimeError(f"LibreOffice UNO tidak siap: {last_error}")
+
+    desktop = ctx.ServiceManager.createInstanceWithContext(
+        "com.sun.star.frame.Desktop",
+        ctx,
+    )
+    doc = desktop.loadComponentFromURL(
+        uno.systemPathToFileUrl(docx_path),
+        "_blank",
+        0,
+        tuple(
+            [
+                prop("Hidden", True),
+                prop("ReadOnly", False),
+                prop("UpdateDocMode", 3),
+            ]
+        ),
+    )
+
+    if doc is None:
+        raise RuntimeError("Dokumen tidak bisa dibuka oleh LibreOffice")
+
+    indexes = doc.getDocumentIndexes()
+    for index in range(indexes.getCount()):
+        indexes.getByIndex(index).update()
+
+    try:
+        doc.TextFields.refresh()
+    except Exception:
+        pass
+
+    if output_kind == "docx":
+        doc.store()
+    else:
+        doc.storeToURL(
+            uno.systemPathToFileUrl(output_path),
+            tuple(
+                [
+                    prop("FilterName", "writer_pdf_Export"),
+                    prop("Overwrite", True),
+                ]
+            ),
+        )
+    doc.close(True)
+finally:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    shutil.rmtree(profile_dir, ignore_errors=True)
+`;
+  }
+
+  private buildIntraFinalDocumentData(
+    title: string,
+    contentJson: unknown,
+    identityOverrides: Record<string, string>,
+  ): IntraFinalDocumentData {
+    const content = this.recordValue(contentJson);
+    const identity = this.recordValue(content.identity);
+    const profile = this.recordValue(content.profileAndLearningDirection);
+    const interdisciplinary = this.recordValue(
+      profile.interdisciplinaryIntegration,
+    );
+    const learningDesign = this.recordValue(content.learningDesign);
+    const pedagogical = this.recordValue(learningDesign.pedagogicalPractice);
+    const partnership = this.recordValue(learningDesign.partnership);
+    const digitalUse = this.recordValue(learningDesign.digitalUse);
+    const meetingActivities = this.recordValue(content.meetingActivities);
+    const assessment = this.recordValue(content.assessment);
+    const summative = this.recordValue(assessment.summative);
+    const followUp = this.recordValue(content.followUp);
+    const teacherReflection = this.recordValue(content.teacherReflection);
+    const field = (key: string, fallback = '') =>
+      this.firstIntraText(identityOverrides[key], identity[key], fallback);
+    const topic = field('topic', this.firstIntraText(content.title, title));
+    const subject = field('subject');
+    const meetingCount = this.formatIntraMeetingCount(field('meetingCount'));
+    const timeAllocation = field('timeAllocation');
+    const footerTitle = this.coverTitle(title, {
+      ...identityOverrides,
+      topic,
+      subject,
+    });
+    const interdisciplinaryDiscipline =
+      this.firstIntraText(interdisciplinary.relatedDiscipline) ||
+      this.firstIntraText(interdisciplinary.relatedSubject) ||
+      this.firstIntraText(interdisciplinary.subject) ||
+      'Tidak ada lintas disiplin khusus';
+    const interdisciplinaryRationale =
+      this.firstIntraText(interdisciplinary.rationale) ||
+      `Pembelajaran tetap berpusat pada ${subject || 'mata pelajaran utama'} dan dapat dikaitkan dengan konteks lain yang relevan bila tersedia.`;
+    const interdisciplinaryForm =
+      this.firstIntraText(interdisciplinary.integrationForm) ||
+      `Integrasi dilakukan sebagai penguat konteks saat murid memahami ${topic || 'materi'} dan mengaitkannya dengan pengalaman belajar sehari-hari.`;
+    const interdisciplinaryNotes =
+      this.firstIntraText(interdisciplinary.notes) ||
+      'Lintas disiplin bersifat pendukung. Kompetensi utama tetap mengikuti tujuan pembelajaran mata pelajaran inti.';
+
+    return {
+      title: this.firstIntraText(content.title, title) || title,
+      footerTitle,
+      identityRows: [
+        ['Nama Sekolah', field('schoolName')],
+        ['Nama Guru', field('teacherName')],
+        ['Jenjang', field('educationLevel')],
+        ['Fase', field('phase')],
+        ['Kelas/Semester', field('gradeLevel')],
+        ['Mata Pelajaran', subject],
+        ['Materi/Pokok Bahasan', topic],
+        ['Elemen', field('element')],
+        ['Alokasi Waktu Total', timeAllocation],
+        ['Jumlah Pertemuan', meetingCount],
+        ['Tahun Ajaran', field('academicYear')],
+      ].map(([label, value]) => ({ label, value: value || '-' })),
+      materialContext:
+        this.firstIntraText(content.materialContext) ||
+        `RPP ini mengaitkan materi ${topic || 'pembelajaran'} dengan situasi sehari-hari yang dekat dengan murid. Fokus utamanya tetap pada ${subject || 'mata pelajaran'} dan penggunaan konsep untuk menyelesaikan masalah secara runtut.`,
+      graduateProfiles: this.recordList(profile.graduateProfiles)
+        .map((item) => ({
+          label: this.firstIntraText(item.dimension, item.name),
+          value: this.firstIntraText(item.description),
+        }))
+        .filter((row) => row.label || row.value),
+      interdisciplinaryRows: [
+        {
+          label: 'Disiplin Ilmu Terkait',
+          value: interdisciplinaryDiscipline,
+        },
+        {
+          label: 'Alasan Keterkaitan',
+          value: interdisciplinaryRationale,
+        },
+        {
+          label: 'Bentuk Integrasi',
+          value: interdisciplinaryForm,
+        },
+        {
+          label: 'Catatan',
+          value: interdisciplinaryNotes,
+        },
+      ],
+      learningObjectives: this.intraStringList(profile.learningObjectives),
+      essentialQuestion: this.firstIntraText(profile.essentialQuestion),
+      pedagogicalDescription: this.firstIntraText(pedagogical.description),
+      pedagogicalForms: this.recordList(pedagogical.forms)
+        .map((item) => ({
+          label: this.firstIntraText(item.name, item.title),
+          value: this.firstIntraText(item.description, item.function),
+        }))
+        .filter((row) => row.label || row.value),
+      partnershipRows: this.recordList(partnership.items)
+        .map((item) => ({
+          label: this.firstIntraText(item.partner, item.name),
+          value: this.firstIntraText(item.partnerRole, item.role, item.notes),
+        }))
+        .filter((row) => row.label || row.value),
+      digitalRows: this.recordList(digitalUse.items)
+        .map((item) => ({
+          label: this.firstIntraText(item.sourceOrPlatform, item.source),
+          value: [
+            this.firstIntraText(item.linkOrAccess, item.access),
+            this.firstIntraText(item.function),
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        }))
+        .filter((row) => row.label || row.value),
+      digitalNotes: this.firstIntraText(digitalUse.notes),
+      resourceRows: this.recordList(learningDesign.resources)
+        .map((item) => ({
+          label: this.firstIntraText(item.name, item.title),
+          value: this.firstIntraText(item.function, item.description),
+        }))
+        .filter((row) => row.label || row.value),
+      meetingOverview: this.firstIntraText(meetingActivities.overview),
+      meetings: this.recordList(meetingActivities.meetings).map(
+        (meeting, index) => this.buildIntraFinalMeeting(meeting, index),
+      ),
+      summative: {
+        provision: this.firstIntraText(summative.provision),
+        description: this.firstIntraText(summative.description),
+        sampleTasks: this.intraStringList(summative.sampleTasks),
+        criteria: this.intraStringList(summative.criteria),
+        achievementLevels: this.recordList(summative.achievementLevels)
+          .map((item) => ({
+            label: this.firstIntraText(item.level),
+            value: [
+              this.firstIntraText(item.description),
+              this.firstIntraText(item.followUp)
+                ? `Tindak lanjut: ${this.firstIntraText(item.followUp)}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          }))
+          .filter((row) => row.label || row.value),
+      },
+      followUp: {
+        description: this.firstIntraText(followUp.description),
+        rows: [
+          {
+            label: 'Belum mencapai tujuan pembelajaran',
+            value: this.firstIntraText(followUp.notYetAchieved),
+          },
+          {
+            label: 'Hampir mencapai tujuan pembelajaran',
+            value: this.firstIntraText(followUp.almostAchieved),
+          },
+          {
+            label: 'Sudah mencapai tujuan pembelajaran',
+            value: this.firstIntraText(followUp.achieved),
+          },
+          {
+            label: 'Melampaui tujuan pembelajaran',
+            value: this.firstIntraText(followUp.exceeding),
+          },
+        ].filter((row) => row.value),
+        enrichmentExample: this.firstIntraText(followUp.enrichmentExample),
+      },
+      teacherReflection: {
+        description: this.firstIntraText(teacherReflection.description),
+        questions: this.intraStringList(teacherReflection.questions),
+      },
+      finalFlowSummary: this.firstIntraText(content.finalFlowSummary),
+    };
+  }
+
+  private buildIntraFinalMeeting(
+    meeting: Record<string, unknown>,
+    index: number,
+  ): IntraFinalMeeting {
+    const diagnostic = this.recordValue(meeting.diagnostic);
+    const understanding = this.recordValue(meeting.understanding);
+    const applying = this.recordValue(meeting.applying);
+    const differentiation = this.recordValue(applying.differentiation);
+    const reflecting = this.recordValue(meeting.reflecting);
+    const formative = this.recordValue(meeting.formativeAssessment);
+    const orderText = this.firstIntraText(meeting.meetingOrder);
+    const order = Number.parseInt(orderText, 10) || index + 1;
+    const focus = this.firstIntraText(meeting.focus);
+
+    return {
+      order,
+      title:
+        this.normalizeIntraMeetingTitle(
+          this.firstIntraText(meeting.meetingTitle, meeting.title, focus),
+          order,
+        ) ||
+        focus ||
+        `Pertemuan ${order}`,
+      intro: this.firstIntraText(meeting.introParagraph, meeting.description),
+      focus,
+      target: this.firstIntraText(meeting.target),
+      diagnostic: {
+        step1: this.firstIntraText(
+          diagnostic.step1Description,
+          diagnostic.description,
+        ),
+        sampleQuestion: this.firstIntraText(diagnostic.sampleQuestion),
+        answerOptions: this.intraStringList(diagnostic.answerOptions),
+        correctAnswer: this.firstIntraText(diagnostic.correctAnswer),
+        step2: this.firstIntraText(diagnostic.step2Description),
+        teacherNotes: this.firstIntraText(diagnostic.teacherNotes),
+      },
+      understanding: {
+        teacherNotes: this.firstIntraText(understanding.teacherNotes),
+        step4: this.firstIntraText(
+          understanding.step4Description,
+          understanding.description,
+        ),
+        step5: this.firstIntraText(understanding.step5Description),
+        triggerQuestions: this.intraStringList(understanding.triggerQuestions),
+      },
+      applying: {
+        step6: this.firstIntraText(
+          applying.step6Description,
+          applying.description,
+        ),
+        supportGroup: this.firstIntraText(differentiation.supportGroup),
+        advancedGroup: this.firstIntraText(differentiation.advancedGroup),
+        step7: this.firstIntraText(applying.step7Description),
+        flowSummary: this.intraStringList(applying.flowSummary),
+        product: this.firstIntraText(applying.product),
+      },
+      reflecting: {
+        description: this.firstIntraText(reflecting.description),
+        step8: this.firstIntraText(reflecting.step8Description),
+        questions: this.intraStringList(reflecting.reflectionQuestions),
+      },
+      formative: {
+        step9: this.firstIntraText(
+          formative.step9Description,
+          formative.description,
+        ),
+        technique: this.firstIntraText(formative.technique),
+        indicators: this.intraStringList(formative.observedIndicators),
+        recordFormat: this.firstIntraText(formative.teacherRecordFormat),
+      },
+    };
+  }
+
+  private renderIntraFinalTableOfContents(): string {
+    return [
+      this.renderIntraParagraph('Daftar Isi', {
+        align: 'center',
+        bold: true,
+        color: TEMPLATE_BLUE,
+        size: 28,
+        spacingBefore: 760,
+        spacingAfter: 720,
+      }),
+      this.renderDocxAutomaticTableOfContents(),
+      this.renderDocxPageBreak(),
+    ].join('');
+  }
+
+  private buildIntraFinalTocEntries(data: IntraFinalDocumentData): Array<{
+    level: 1 | 2;
+    page: number;
+    text: string;
+  }> {
+    const firstMeetingPage = 7;
+    const pagesPerMeeting = 5;
+    const entries: Array<{ level: 1 | 2; page: number; text: string }> = [
+      { level: 1, text: 'A. Identitas Pembelajaran', page: 3 },
+      { level: 1, text: 'B. Profil dan Arah Pembelajaran', page: 4 },
+      { level: 2, text: '1. Profil Lulusan yang Dikembangkan', page: 4 },
+      { level: 2, text: '2. Lintas Disiplin Ilmu', page: 4 },
+      { level: 2, text: '3. Tujuan Pembelajaran', page: 4 },
+      { level: 1, text: 'C. Desain Pembelajaran', page: 5 },
+      { level: 2, text: '1. Praktik Pedagogis', page: 5 },
+      { level: 2, text: '2. Kemitraan Pembelajaran', page: 5 },
+      { level: 2, text: '3. Pemanfaatan Digital', page: 5 },
+      { level: 2, text: '4. Sumber Daya', page: 6 },
+      {
+        level: 1,
+        text: 'D. Rangkaian Kegiatan Pembelajaran per Pertemuan',
+        page: firstMeetingPage,
+      },
+    ];
+
+    data.meetings.forEach((meeting, index) => {
+      const meetingPage = firstMeetingPage + index * pagesPerMeeting;
+      entries.push(
+        {
+          level: 2,
+          text: `Pertemuan ${meeting.order} - ${meeting.title}`,
+          page: meetingPage,
+        },
+        {
+          level: 2,
+          text: '1. Analisis Diagnostik / Cek Kesiapan Awal',
+          page: meetingPage + 1,
+        },
+        { level: 2, text: '2. Memahami', page: meetingPage + 2 },
+        {
+          level: 2,
+          text: '3. Mengaplikasi - Mini-PjBL Berdiferensiasi',
+          page: meetingPage + 3,
+        },
+        { level: 2, text: '4. Merefleksi', page: meetingPage + 4 },
+        { level: 2, text: '5. Asesmen Formatif', page: meetingPage + 4 },
+      );
+    });
+
+    const summativePage =
+      firstMeetingPage + Math.max(data.meetings.length, 1) * pagesPerMeeting;
+    entries.push(
+      {
+        level: 2,
+        text: '6. Asesmen Sumatif UH/UTS/UAS',
+        page: summativePage,
+      },
+      {
+        level: 1,
+        text: 'E. Tindak Lanjut Pembelajaran',
+        page: summativePage + 2,
+      },
+      { level: 1, text: 'F. Refleksi Guru', page: summativePage + 3 },
+    );
+    return entries;
+  }
+
+  private renderIntraFinalBody(
+    data: IntraFinalDocumentData,
+    assets: { book: boolean; question: boolean; warning: boolean },
+  ): string {
+    return [
+      this.renderIntraHeading('A. Identitas Pembelajaran', 1),
+      this.renderIntraKeyValueTable(data.identityRows),
+      this.renderIntraSpacer(420),
+      this.renderIntraBox(
+        'Konteks Materi',
+        this.renderIntraParagraph(data.materialContext, {
+          justify: true,
+          spacingAfter: 0,
+        }),
+      ),
+      this.renderDocxPageBreak(),
+      this.renderIntraHeading('B. Profil dan Arah Pembelajaran', 1, {
+        spacingBefore: 520,
+      }),
+      this.renderIntraHeading('1. Profil Lulusan yang Dikembangkan', 2),
+      this.renderIntraKeyValueTable(data.graduateProfiles, {
+        labelWidth: 2800,
+        valueWidth: 6200,
+      }),
+      this.renderIntraHeading('2. Lintas Disiplin Ilmu', 2, {
+        spacingBefore: 360,
+      }),
+      this.renderIntraKeyValueTable(data.interdisciplinaryRows, {
+        labelWidth: 2800,
+        valueWidth: 6200,
+      }),
+      this.renderIntraHeading('3. Tujuan Pembelajaran', 2, {
+        spacingBefore: 360,
+      }),
+      this.renderIntraLearningObjectivesBox(data.learningObjectives),
+      this.renderDocxPageBreak(),
+      this.renderIntraHeading('C. Desain Pembelajaran', 1, {
+        spacingBefore: 420,
+      }),
+      this.renderIntraHeading('1. Praktik Pedagogis', 2),
+      this.renderIntraPedagogicalPracticeBox(
+        data.pedagogicalDescription,
+        data.pedagogicalForms,
+      ),
+      this.renderIntraHeading('2. Kemitraan Pembelajaran', 2, {
+        spacingBefore: 320,
+      }),
+      this.renderIntraKeyValueTable(data.partnershipRows, {
+        header: ['Mitra', 'Peran Mitra'],
+        labelWidth: 2800,
+        valueWidth: 6200,
+      }),
+      this.renderIntraHeading('3. Pemanfaatan Digital', 2, {
+        spacingBefore: 320,
+      }),
+      this.renderIntraKeyValueTable(data.digitalRows, {
+        header: ['Sumber Digital', 'Tautan'],
+        labelWidth: 3000,
+        valueWidth: 6000,
+      }),
+      data.digitalNotes
+        ? this.renderIntraParagraph(data.digitalNotes, {
+            justify: true,
+            spacingBefore: 120,
+          })
+        : '',
+      this.renderIntraHeading('4. Sumber Daya', 2, {
+        spacingBefore: 320,
+      }),
+      this.renderIntraKeyValueTable(data.resourceRows, {
+        header: ['Sumber Daya', 'Fungsi'],
+        labelWidth: 3000,
+        valueWidth: 6000,
+      }),
+      this.renderDocxPageBreak(),
+      this.renderIntraHeading(
+        'D. Rangkaian Kegiatan Pembelajaran per Pertemuan',
+        1,
+      ),
+      this.renderIntraParagraph(data.meetingOverview, {
+        justify: true,
+        spacingAfter: 260,
+      }),
+      ...data.meetings.map((meeting, index) =>
+        this.renderIntraMeeting(meeting, index, assets),
+      ),
+      this.renderIntraSummative(data, assets),
+      this.renderDocxPageBreak(),
+      this.renderIntraHeading('E. Tindak Lanjut Pembelajaran', 1),
+      this.renderIntraParagraph(data.followUp.description, {
+        justify: true,
+      }),
+      this.renderIntraKeyValueTable(data.followUp.rows, {
+        labelWidth: 3100,
+        valueWidth: 5900,
+      }),
+      data.followUp.enrichmentExample
+        ? this.renderIntraEnrichmentExampleBox(data.followUp.enrichmentExample)
+        : '',
+      this.renderDocxPageBreak(),
+      this.renderIntraHeading('F. Refleksi Guru', 1, {
+        spacingBefore: 380,
+      }),
+      this.renderIntraParagraph(data.teacherReflection.description, {
+        justify: true,
+      }),
+      this.renderIntraReflectionTable(data.teacherReflection.questions),
+      this.renderIntraFinalFlowSummaryBox(data.finalFlowSummary),
+    ].join('');
+  }
+
+  private renderIntraMeeting(
+    meeting: IntraFinalMeeting,
+    index: number,
+    assets: { question: boolean; warning: boolean },
+  ): string {
+    return [
+      index > 0 ? this.renderIntraSpacer(260) : '',
+      this.renderIntraMeetingHeader(meeting),
+      this.renderIntraParagraph(meeting.intro, {
+        justify: true,
+        spacingBefore: 220,
+      }),
+      this.renderIntraKeyValueTable(
+        [
+          { label: 'Fokus Pertemuan', value: meeting.focus },
+          { label: 'Target Pertemuan', value: meeting.target },
+        ],
+        {
+          header: ['Fokus Pertemuan', 'Target Pertemuan'],
+          labelWidth: 4500,
+          valueWidth: 4500,
+          useRowsAsSingleHeaderBody: true,
+        },
+      ),
+      this.renderIntraHeading('1. Analisis Diagnostik / Cek Kesiapan Awal', 2),
+      this.renderIntraStepParagraph(1, meeting.diagnostic.step1, {
+        justify: true,
+      }),
+      meeting.diagnostic.sampleQuestion
+        ? this.renderIntraDiagnosticQuestionBox(
+            meeting.diagnostic.sampleQuestion,
+            meeting.diagnostic.answerOptions,
+            meeting.diagnostic.correctAnswer,
+            assets.question,
+          )
+        : '',
+      this.renderIntraStepParagraph(2, meeting.diagnostic.step2, {
+        justify: true,
+        spacingBefore: 140,
+      }),
+      meeting.diagnostic.teacherNotes
+        ? this.renderIntraTeacherNoteBox(
+            meeting.diagnostic.teacherNotes,
+            assets.warning,
+          )
+        : '',
+      this.renderIntraHeading('2. Memahami', 2),
+      meeting.understanding.teacherNotes
+        ? this.renderIntraTeacherNoteBox(
+            meeting.understanding.teacherNotes,
+            assets.warning,
+          )
+        : '',
+      this.renderIntraStepParagraph(4, meeting.understanding.step4, {
+        justify: true,
+      }),
+      this.renderIntraStepParagraph(5, meeting.understanding.step5, {
+        justify: true,
+      }),
+      meeting.understanding.triggerQuestions.length
+        ? this.renderIntraQuestionListBox(
+            'Pertanyaan Pemantik',
+            meeting.understanding.triggerQuestions,
+            assets.question,
+          )
+        : '',
+      this.renderIntraHeading('3. Mengaplikasi - Mini-PjBL Berdiferensiasi', 2),
+      this.renderIntraStepParagraph(6, meeting.applying.step6, {
+        justify: true,
+      }),
+      meeting.applying.supportGroup || meeting.applying.advancedGroup
+        ? this.renderIntraDifferentiationTable(meeting)
+        : '',
+      this.renderIntraStepParagraph(7, meeting.applying.step7, {
+        justify: true,
+        spacingBefore: 160,
+      }),
+      meeting.applying.flowSummary.length
+        ? this.renderIntraApplyingSummaryBox(meeting.applying.flowSummary)
+        : '',
+      meeting.applying.product
+        ? this.renderIntraApplyingProductBox(meeting.applying.product)
+        : '',
+      this.renderIntraHeading('4. Merefleksi', 2),
+      this.renderIntraParagraph(meeting.reflecting.description, {
+        justify: true,
+      }),
+      this.renderIntraStepParagraph(8, meeting.reflecting.step8, {
+        justify: true,
+      }),
+      meeting.reflecting.questions.length
+        ? this.renderIntraQuestionListBox(
+            'Pertanyaan Refleksi',
+            meeting.reflecting.questions,
+            assets.question,
+          )
+        : '',
+      this.renderIntraHeading('5. Asesmen Formatif', 2, {
+        spacingBefore: 360,
+      }),
+      this.renderIntraStepParagraph(9, meeting.formative.step9, {
+        justify: true,
+      }),
+      meeting.formative.technique
+        ? this.renderIntraParagraph(
+            `Teknik Asesmen: ${meeting.formative.technique}`,
+            { bold: true },
+          )
+        : '',
+      meeting.formative.indicators.length
+        ? this.renderIntraFormativeIndicatorsBox(meeting.formative.indicators)
+        : '',
+      meeting.formative.recordFormat
+        ? this.renderIntraFormativeRecordBox(meeting.formative.recordFormat)
+        : '',
+    ].join('');
+  }
+
+  private renderIntraSummative(
+    data: IntraFinalDocumentData,
+    assets: { book: boolean },
+  ): string {
+    const summative = data.summative;
+    return [
+      this.renderIntraHeading('6. Asesmen Sumatif UH/UTS/UAS', 2),
+      summative.provision
+        ? this.renderIntraSummativeProvisionBox(
+            summative.provision,
+            assets.book,
+          )
+        : '',
+      this.renderIntraParagraph(summative.description, {
+        justify: true,
+      }),
+      summative.sampleTasks.length
+        ? [
+            this.renderIntraParagraph('Contoh Bentuk Soal Sumatif', {
+              bold: true,
+              spacingBefore: 140,
+              spacingAfter: 120,
+            }),
+            this.renderIntraBulletList(summative.sampleTasks),
+          ].join('')
+        : '',
+      summative.criteria.length
+        ? [
+            this.renderIntraParagraph('Kriteria Penilaian Sumatif', {
+              bold: true,
+              spacingBefore: 140,
+              spacingAfter: 120,
+            }),
+            this.renderIntraBulletList(summative.criteria),
+          ].join('')
+        : '',
+      this.renderIntraKeyValueTable(summative.achievementLevels, {
+        labelWidth: 2500,
+        valueWidth: 6500,
+      }),
+    ].join('');
+  }
+
   private buildLkpdDocumentData(
     contentJson: unknown,
     identityOverrides: Record<string, string>,
@@ -556,6 +1541,1053 @@ ${body}
         );
       })
       .filter(Boolean);
+  }
+
+  private recordList(value: unknown): Record<string, unknown>[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value
+      .map((item) => this.recordValue(item))
+      .filter((item) => Object.keys(item).length > 0);
+  }
+
+  private firstIntraText(...values: unknown[]): string {
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return String(value);
+      }
+      if (typeof value === 'string' && value.trim()) {
+        const cleaned = this.cleanInlineText(value, true);
+        if (cleaned) {
+          return cleaned;
+        }
+      }
+    }
+    return '';
+  }
+
+  private intraStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => {
+        if (typeof item === 'number' && Number.isFinite(item)) {
+          return String(item);
+        }
+        if (typeof item === 'string') {
+          return this.cleanInlineText(item, true);
+        }
+        const record = this.recordValue(item);
+        return this.firstIntraText(
+          record.description,
+          record.prompt,
+          record.text,
+          record.item,
+          record.name,
+          record.title,
+        );
+      })
+      .filter(Boolean);
+  }
+
+  private formatIntraMeetingCount(value: string): string {
+    const cleaned = value.trim();
+    if (!cleaned) {
+      return '';
+    }
+    return /^\d+$/.test(cleaned) ? `${cleaned} pertemuan` : cleaned;
+  }
+
+  private normalizeIntraMeetingTitle(value: string, order: number): string {
+    return value
+      .replace(new RegExp(`^\\s*D\\.${order}\\s*[-–—:]?\\s*`, 'i'), '')
+      .replace(new RegExp(`^\\s*Pertemuan\\s+${order}\\s*[-–—:]\\s*`, 'i'), '')
+      .replace(
+        new RegExp(`^\\s*LKPD\\s+Pertemuan\\s+${order}\\s*[-–—:]?\\s*`, 'i'),
+        '',
+      )
+      .replace(/^\s*LKPD\s*[-–—:]?\s*/i, '')
+      .trim();
+  }
+
+  private renderIntraFinalFooter(title: string): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="0"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t xml:space="preserve">${this.escapeXml(
+      `RPP Intrakurikuler - ${title} | Halaman `,
+    )}</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:instrText xml:space="preserve">PAGE</w:instrText></w:r><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:color w:val="6B7280"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`;
+  }
+
+  private renderIntraParagraph(
+    text: string,
+    options: {
+      align?: 'left' | 'center' | 'both';
+      bold?: boolean;
+      color?: string;
+      indentLeft?: number;
+      justify?: boolean;
+      keepNext?: boolean;
+      line?: number;
+      outlineLevel?: 0 | 1 | 2;
+      size?: number;
+      spacingAfter?: number;
+      spacingBefore?: number;
+    } = {},
+  ): string {
+    const paragraphProperties = [
+      `<w:spacing w:before="${options.spacingBefore ?? 0}" w:after="${
+        options.spacingAfter ?? 120
+      }" w:line="${options.line ?? 360}" w:lineRule="auto"/>`,
+      options.keepNext ? '<w:keepNext/>' : '',
+      options.outlineLevel !== undefined
+        ? `<w:outlineLvl w:val="${options.outlineLevel}"/>`
+        : '',
+      options.align
+        ? `<w:jc w:val="${options.align}"/>`
+        : options.justify
+          ? '<w:jc w:val="both"/>'
+          : '',
+      options.indentLeft ? `<w:ind w:left="${options.indentLeft}"/>` : '',
+    ].join('');
+
+    return `<w:p><w:pPr>${paragraphProperties}</w:pPr>${this.renderIntraRuns(
+      text,
+      {
+        bold: options.bold,
+        color: options.color ?? '555555',
+        size: options.size ?? 24,
+      },
+    )}</w:p>`;
+  }
+
+  private renderIntraStepParagraph(
+    stepNumber: number,
+    text: string,
+    options: {
+      justify?: boolean;
+      line?: number;
+      spacingAfter?: number;
+      spacingBefore?: number;
+    } = {},
+  ): string {
+    const paragraphProperties = [
+      `<w:spacing w:before="${options.spacingBefore ?? 0}" w:after="${
+        options.spacingAfter ?? 120
+      }" w:line="${options.line ?? 360}" w:lineRule="auto"/>`,
+      options.justify ? '<w:jc w:val="both"/>' : '',
+    ].join('');
+
+    return `<w:p><w:pPr>${paragraphProperties}</w:pPr>${this.renderIntraRuns(
+      `Langkah\u00A0-\u00A0${stepNumber}`,
+      {
+        bold: true,
+        color: '4D88CF',
+        size: 24,
+      },
+    )}${this.renderIntraRuns(` ${text}`, {
+      color: '555555',
+      size: 24,
+    })}</w:p>`;
+  }
+
+  private renderIntraRuns(
+    text: string,
+    options: { bold?: boolean; color: string; size: number },
+  ): string {
+    const segments = this.parseInlineSegments(text || ' ');
+    return segments
+      .map((segment) => {
+        const runProperties = [
+          '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>',
+          options.bold || segment.bold ? '<w:b/><w:bCs/>' : '',
+          `<w:color w:val="${options.color}"/>`,
+          `<w:sz w:val="${options.size}"/><w:szCs w:val="${options.size}"/>`,
+          '<w:lang w:val="id-ID"/>',
+        ].join('');
+        return `<w:r><w:rPr>${runProperties}</w:rPr><w:t xml:space="preserve">${this.escapeXml(
+          segment.text,
+        )}</w:t></w:r>`;
+      })
+      .join('');
+  }
+
+  private renderIntraHeading(
+    text: string,
+    level: 1 | 2,
+    options: { spacingBefore?: number } = {},
+  ): string {
+    return this.renderIntraParagraph(text, {
+      bold: true,
+      color: level === 1 ? '000000' : TEMPLATE_BLUE,
+      keepNext: true,
+      outlineLevel: level === 1 ? 0 : 1,
+      size: level === 1 ? 26 : 24,
+      spacingBefore: options.spacingBefore ?? (level === 1 ? 240 : 180),
+      spacingAfter: level === 1 ? 260 : 170,
+    });
+  }
+
+  private renderIntraTocEntry(
+    text: string,
+    page: number,
+    level: 1 | 2,
+  ): string {
+    const indent = level === 1 ? 0 : 360;
+    const paragraphProperties = [
+      '<w:spacing w:before="0" w:after="80" w:line="300" w:lineRule="auto"/>',
+      `<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9000"/></w:tabs>`,
+      indent ? `<w:ind w:left="${indent}"/>` : '',
+    ].join('');
+
+    return `<w:p><w:pPr>${paragraphProperties}</w:pPr>${this.renderIntraRuns(
+      text,
+      {
+        bold: true,
+        color: TEMPLATE_BLUE,
+        size: 24,
+      },
+    )}<w:r><w:tab/></w:r>${this.renderIntraRuns(String(page), {
+      bold: true,
+      color: TEMPLATE_BLUE,
+      size: 24,
+    })}</w:p>`;
+  }
+
+  private renderIntraSpacer(height: number): string {
+    return `<w:p><w:pPr><w:spacing w:before="0" w:after="${height}"/></w:pPr></w:p>`;
+  }
+
+  private renderIntraKeyValueTable(
+    rows: IntraFinalTableRow[],
+    options: {
+      header?: [string, string];
+      labelWidth?: number;
+      useRowsAsSingleHeaderBody?: boolean;
+      valueWidth?: number;
+    } = {},
+  ): string {
+    const filteredRows = rows.length > 0 ? rows : [{ label: '-', value: '-' }];
+    const labelWidth = options.labelWidth ?? 4500;
+    const valueWidth = options.valueWidth ?? 4500;
+
+    if (options.useRowsAsSingleHeaderBody && filteredRows.length >= 2) {
+      const [left, right] = filteredRows;
+      return this.renderIntraTable(
+        [
+          `<w:tr>${this.renderIntraCell(left.label, {
+            align: 'center',
+            bold: true,
+            color: TEMPLATE_BLUE,
+            fill: 'E8F3FE',
+            width: labelWidth,
+          })}${this.renderIntraCell(right.label, {
+            align: 'center',
+            bold: true,
+            color: '6D8B2D',
+            fill: 'E8F4ED',
+            width: valueWidth,
+          })}</w:tr>`,
+          `<w:tr>${this.renderIntraCell(left.value, {
+            width: labelWidth,
+          })}${this.renderIntraCell(right.value, {
+            width: valueWidth,
+          })}</w:tr>`,
+        ].join(''),
+        [labelWidth, valueWidth],
+      );
+    }
+
+    const header = options.header
+      ? `<w:tr>${this.renderIntraCell(options.header[0], {
+          align: 'center',
+          bold: true,
+          color: TEMPLATE_BLUE,
+          fill: 'F8FAFA',
+          width: labelWidth,
+        })}${this.renderIntraCell(options.header[1], {
+          align: 'center',
+          bold: true,
+          color: TEMPLATE_BLUE,
+          fill: 'F8FAFA',
+          width: valueWidth,
+        })}</w:tr>`
+      : '';
+    const tableRows = filteredRows
+      .map(
+        (row) =>
+          `<w:tr>${this.renderIntraCell(row.label, {
+            bold: true,
+            color: TEMPLATE_BLUE,
+            fill: 'F8FAFA',
+            width: labelWidth,
+          })}${this.renderIntraCell(row.value, { width: valueWidth })}</w:tr>`,
+      )
+      .join('');
+
+    return this.renderIntraTable(`${header}${tableRows}`, [
+      labelWidth,
+      valueWidth,
+    ]);
+  }
+
+  private renderIntraTable(rows: string, grid: number[], width = 9000): string {
+    return `<w:tbl><w:tblPr><w:tblW w:w="${width}" w:type="dxa"/><w:jc w:val="center"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="D5DFDA"/><w:left w:val="single" w:sz="4" w:color="D5DFDA"/><w:bottom w:val="single" w:sz="4" w:color="D5DFDA"/><w:right w:val="single" w:sz="4" w:color="D5DFDA"/><w:insideH w:val="single" w:sz="4" w:color="D5DFDA"/><w:insideV w:val="single" w:sz="4" w:color="D5DFDA"/></w:tblBorders><w:tblCellMar><w:top w:w="95" w:type="dxa"/><w:left w:w="140" w:type="dxa"/><w:bottom w:w="95" w:type="dxa"/><w:right w:w="140" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid
+      .map((item) => `<w:gridCol w:w="${item}"/>`)
+      .join('')}</w:tblGrid>${rows}</w:tbl>`;
+  }
+
+  private renderIntraBorderOnlyTable(
+    rows: string,
+    grid: number[],
+    width = 9000,
+  ): string {
+    return `<w:tbl><w:tblPr><w:tblW w:w="${width}" w:type="dxa"/><w:jc w:val="center"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="D5DFDA"/><w:left w:val="single" w:sz="6" w:color="D5DFDA"/><w:bottom w:val="single" w:sz="6" w:color="D5DFDA"/><w:right w:val="single" w:sz="6" w:color="D5DFDA"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblCellMar><w:top w:w="110" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="110" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid
+      .map((item) => `<w:gridCol w:w="${item}"/>`)
+      .join('')}</w:tblGrid>${rows}</w:tbl>`;
+  }
+
+  private renderIntraCell(
+    text: string,
+    options: {
+      align?: 'center';
+      bold?: boolean;
+      color?: string;
+      fill?: string;
+      outlineLevel?: 0 | 1 | 2;
+      width: number;
+    },
+  ): string {
+    const cellProperties = [
+      `<w:tcW w:w="${options.width}" w:type="dxa"/>`,
+      options.fill ? `<w:shd w:fill="${options.fill}"/>` : '',
+      '<w:vAlign w:val="center"/>',
+    ].join('');
+    return `<w:tc><w:tcPr>${cellProperties}</w:tcPr>${this.renderIntraParagraph(
+      text,
+      {
+        align: options.align,
+        bold: options.bold,
+        color: options.color ?? '555555',
+        outlineLevel: options.outlineLevel,
+        size: 24,
+        spacingAfter: 0,
+      },
+    )}</w:tc>`;
+  }
+
+  private renderIntraImageParagraph(
+    relationshipId: string,
+    name: string,
+    sizeEmu: number,
+  ): string {
+    return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="0"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${sizeEmu}" cy="${sizeEmu}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="30" name="${this.escapeXml(
+      name,
+    )}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="30" name="${this.escapeXml(
+      name,
+    )}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${sizeEmu}" cy="${sizeEmu}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  }
+
+  private renderIntraBox(title: string, content: string): string {
+    const body = [
+      this.renderIntraParagraph(title, {
+        bold: true,
+        color: TEMPLATE_ORANGE,
+        keepNext: true,
+        spacingAfter: 100,
+      }),
+      content,
+    ].join('');
+
+    return this.renderIntraTable(
+      `<w:tr>${this.renderIntraContentCell(body, {
+        fill: 'FBF8EF',
+        width: 9000,
+      })}</w:tr>`,
+      [9000],
+    );
+  }
+
+  private renderIntraDiagnosticQuestionBox(
+    sampleQuestion: string,
+    answerOptions: string[],
+    correctAnswer: string,
+    withQuestionIcon: boolean,
+  ): string {
+    const iconCell = withQuestionIcon
+      ? this.renderIntraContentCell(
+          this.renderIntraImageParagraph(
+            'rIdQuestionIcon',
+            'Question Icon',
+            850000,
+          ),
+          {
+            fill: 'FBF8EF',
+            width: 1500,
+          },
+        )
+      : '';
+    const answerContent = [
+      answerOptions.length
+        ? this.renderIntraParagraph('Pilih jawaban yang paling tepat.', {
+            spacingAfter: 70,
+          })
+        : '',
+      this.renderIntraPlainList(answerOptions),
+      correctAnswer
+        ? this.renderIntraParagraph(
+            `Jawaban yang diharapkan: ${correctAnswer}`,
+            { spacingAfter: 0 },
+          )
+        : '',
+    ].join('');
+    const contentCell = this.renderIntraContentCell(
+      [
+        this.renderIntraParagraph('Contoh Soal Diagnostik Berbasis Kertas', {
+          bold: true,
+          color: '6D8B2D',
+          keepNext: true,
+          spacingAfter: 90,
+        }),
+        this.renderIntraParagraph(sampleQuestion, {
+          justify: true,
+          spacingAfter: answerContent ? 130 : 0,
+        }),
+        answerContent,
+      ].join(''),
+      {
+        fill: 'FBF8EF',
+        width: withQuestionIcon ? 7500 : 9000,
+      },
+    );
+
+    return this.renderIntraBorderOnlyTable(
+      `<w:tr>${iconCell}${contentCell}</w:tr>`,
+      withQuestionIcon ? [1500, 7500] : [9000],
+    );
+  }
+
+  private renderIntraQuestionListBox(
+    title: string,
+    questions: string[],
+    withQuestionIcon: boolean,
+  ): string {
+    const iconCell = withQuestionIcon
+      ? this.renderIntraContentCell(
+          this.renderIntraImageParagraph(
+            'rIdQuestionIcon',
+            'Question Icon',
+            850000,
+          ),
+          {
+            fill: 'FBF8EF',
+            width: 1500,
+          },
+        )
+      : '';
+    const contentCell = this.renderIntraContentCell(
+      [
+        this.renderIntraParagraph(title, {
+          bold: true,
+          color: TEMPLATE_ORANGE,
+          keepNext: true,
+          spacingAfter: 120,
+        }),
+        this.renderIntraNumberedList(questions),
+      ].join(''),
+      {
+        fill: 'FBF8EF',
+        width: withQuestionIcon ? 7500 : 9000,
+      },
+    );
+
+    return this.renderIntraBorderOnlyTable(
+      `<w:tr>${iconCell}${contentCell}</w:tr>`,
+      withQuestionIcon ? [1500, 7500] : [9000],
+    );
+  }
+
+  private renderIntraSummativeProvisionBox(
+    provision: string,
+    withBookIcon: boolean,
+  ): string {
+    const iconCell = withBookIcon
+      ? this.renderIntraContentCell(
+          this.renderIntraImageParagraph('rIdBookIcon', 'Book Icon', 850000),
+          {
+            fill: 'FBF8EF',
+            width: 1500,
+          },
+        )
+      : '';
+    const contentCell = this.renderIntraContentCell(
+      [
+        this.renderIntraParagraph('Ketentuan', {
+          bold: true,
+          color: TEMPLATE_ORANGE,
+          keepNext: true,
+          size: 24,
+          spacingAfter: 90,
+        }),
+        this.renderIntraParagraph(provision, {
+          color: '111827',
+          justify: true,
+          spacingAfter: 0,
+        }),
+      ].join(''),
+      {
+        fill: 'FBF8EF',
+        width: withBookIcon ? 7500 : 9000,
+      },
+    );
+
+    return this.renderIntraBorderOnlyTable(
+      `<w:tr>${iconCell}${contentCell}</w:tr>`,
+      withBookIcon ? [1500, 7500] : [9000],
+    );
+  }
+
+  private renderIntraApplyingSummaryBox(items: string[]): string {
+    return this.renderIntraApplyingInfoBox(
+      'Ringkasan Alur Mengaplikasi',
+      this.renderIntraBulletList(items, {
+        bulletIndent: 250,
+        spacingAfter: 70,
+      }),
+      { spacingBefore: 170 },
+    );
+  }
+
+  private renderIntraApplyingProductBox(product: string): string {
+    return [
+      this.renderIntraSpacer(180),
+      this.renderIntraApplyingInfoBox(
+        'Produk/Kinerja yang Dikumpulkan',
+        this.renderIntraParagraph(product, {
+          color: '222222',
+          spacingAfter: 0,
+        }),
+      ),
+    ].join('');
+  }
+
+  private renderIntraApplyingInfoBox(
+    title: string,
+    content: string,
+    options: { spacingBefore?: number } = {},
+  ): string {
+    const body = [
+      this.renderIntraParagraph(title, {
+        bold: true,
+        color: TEMPLATE_BLUE,
+        keepNext: true,
+        size: 24,
+        spacingAfter: 130,
+        spacingBefore: options.spacingBefore ?? 0,
+      }),
+      content,
+    ].join('');
+
+    return this.renderIntraTable(
+      `<w:tr><w:trPr><w:cantSplit/></w:trPr>${this.renderIntraContentCell(
+        body,
+        {
+          fill: 'EAF5F8',
+          width: 9000,
+        },
+      )}</w:tr>`,
+      [9000],
+    );
+  }
+
+  private renderIntraFormativeIndicatorsBox(items: string[]): string {
+    const body = [
+      this.renderIntraParagraph('Indikator yang Diamati Guru', {
+        bold: true,
+        color: TEMPLATE_BLUE,
+        keepNext: true,
+        size: 24,
+        spacingAfter: 120,
+      }),
+      this.renderIntraBulletList(items, {
+        bulletIndent: 250,
+        spacingAfter: 60,
+      }),
+    ].join('');
+
+    return this.renderIntraTable(
+      `<w:tr><w:trPr><w:cantSplit/></w:trPr>${this.renderIntraContentCell(
+        body,
+        {
+          fill: 'EAF5F8',
+          width: 9000,
+        },
+      )}</w:tr>`,
+      [9000],
+    );
+  }
+
+  private renderIntraFormativeRecordBox(recordFormat: string): string {
+    const body = [
+      this.renderIntraParagraph('Bentuk Catatan Formatif', {
+        bold: true,
+        color: '6D8B2D',
+        keepNext: true,
+        size: 24,
+        spacingAfter: 100,
+      }),
+      this.renderIntraParagraph(recordFormat, {
+        color: '222222',
+        justify: true,
+        spacingAfter: 0,
+      }),
+    ].join('');
+
+    return [
+      this.renderIntraSpacer(180),
+      this.renderIntraTable(
+        `<w:tr><w:trPr><w:cantSplit/></w:trPr>${this.renderIntraContentCell(
+          body,
+          {
+            fill: 'FBF8EF',
+            width: 9000,
+          },
+        )}</w:tr>`,
+        [9000],
+      ),
+    ].join('');
+  }
+
+  private renderIntraEnrichmentExampleBox(enrichmentExample: string): string {
+    const body = [
+      this.renderIntraParagraph('Contoh Pengayaan', {
+        bold: true,
+        color: '6D8B2D',
+        keepNext: true,
+        size: 24,
+        spacingAfter: 150,
+      }),
+      this.renderIntraParagraph(enrichmentExample, {
+        color: '111827',
+        justify: true,
+        spacingAfter: 0,
+      }),
+    ].join('');
+
+    return [
+      this.renderIntraSpacer(280),
+      this.renderIntraTable(
+        `<w:tr><w:trPr><w:cantSplit/></w:trPr>${this.renderIntraContentCell(
+          body,
+          {
+            fill: 'F6FAF7',
+            width: 9000,
+          },
+        )}</w:tr>`,
+        [9000],
+      ),
+    ].join('');
+  }
+
+  private renderIntraFinalFlowSummaryBox(finalFlowSummary: string): string {
+    const body = [
+      this.renderIntraParagraph('Ringkasan Alur Final', {
+        bold: true,
+        color: TEMPLATE_ORANGE,
+        keepNext: true,
+        size: 24,
+        spacingAfter: 150,
+      }),
+      this.renderIntraParagraph(finalFlowSummary, {
+        color: '111827',
+        justify: true,
+        spacingAfter: 0,
+      }),
+    ].join('');
+
+    return [
+      this.renderIntraSpacer(420),
+      this.renderIntraTable(
+        `<w:tr><w:trPr><w:cantSplit/></w:trPr>${this.renderIntraContentCell(
+          body,
+          {
+            fill: 'FBF8EF',
+            width: 9000,
+          },
+        )}</w:tr>`,
+        [9000],
+      ),
+    ].join('');
+  }
+
+  private renderIntraTeacherNoteBox(
+    note: string,
+    withWarningIcon: boolean,
+  ): string {
+    const iconCell = withWarningIcon
+      ? this.renderIntraContentCell(
+          this.renderIntraImageParagraph(
+            'rIdWarningIcon',
+            'Warning Icon',
+            850000,
+          ),
+          {
+            fill: 'F4DCDC',
+            width: 1500,
+          },
+        )
+      : '';
+    const contentCell = this.renderIntraContentCell(
+      [
+        this.renderIntraParagraph('Catatan Penting untuk Guru', {
+          bold: true,
+          color: 'C94742',
+          keepNext: true,
+          spacingAfter: 120,
+        }),
+        this.renderIntraParagraph(note, {
+          justify: true,
+          spacingAfter: 0,
+        }),
+      ].join(''),
+      {
+        fill: 'F4DCDC',
+        width: withWarningIcon ? 7500 : 9000,
+      },
+    );
+
+    return this.renderIntraBorderOnlyTable(
+      `<w:tr>${iconCell}${contentCell}</w:tr>`,
+      withWarningIcon ? [1500, 7500] : [9000],
+    );
+  }
+
+  private renderIntraLearningObjectivesBox(items: string[]): string {
+    const body =
+      items.length > 0
+        ? this.renderIntraBulletList(items, {
+            bulletIndent: 260,
+            spacingAfter: 70,
+          })
+        : this.renderIntraParagraph('-', { spacingAfter: 0 });
+
+    return this.renderIntraTable(
+      [
+        `<w:tr>${this.renderIntraContentCell(
+          this.renderIntraParagraph('Tujuan Pembelajaran Turunan (TP)', {
+            bold: true,
+            color: '4D88CF',
+            keepNext: true,
+            size: 24,
+            spacingAfter: 0,
+          }),
+          {
+            fill: 'EAF5F8',
+            width: 9000,
+          },
+        )}</w:tr>`,
+        `<w:tr>${this.renderIntraContentCell(body, {
+          width: 9000,
+        })}</w:tr>`,
+      ].join(''),
+      [9000],
+    );
+  }
+
+  private renderIntraPedagogicalPracticeBox(
+    description: string,
+    forms: IntraFinalTableRow[],
+  ): string {
+    const headerRows = [
+      `<w:tr>${this.renderIntraContentCell(
+        this.renderIntraParagraph('Deskripsi Praktik Pedagogis', {
+          bold: true,
+          color: '6D8B2D',
+          keepNext: true,
+          size: 24,
+          spacingAfter: 0,
+        }),
+        {
+          fill: 'FBF8EF',
+          width: 9000,
+        },
+      )}</w:tr>`,
+      `<w:tr>${this.renderIntraContentCell(
+        this.renderIntraParagraph(description || '-', {
+          justify: true,
+          spacingAfter: 0,
+        }),
+        {
+          width: 9000,
+        },
+      )}</w:tr>`,
+      `<w:tr>${this.renderIntraContentCell(
+        this.renderIntraParagraph('Bentuk Praktik Pedagogis', {
+          bold: true,
+          color: '6D8B2D',
+          keepNext: true,
+          size: 24,
+          spacingAfter: 0,
+        }),
+        {
+          fill: 'FBF8EF',
+          width: 9000,
+        },
+      )}</w:tr>`,
+    ].join('');
+    const formColors = ['2A8A9A', TEMPLATE_ORANGE, '6C4B8F'];
+    const formContent =
+      forms.length > 0
+        ? forms
+            .map((row, index) =>
+              [
+                this.renderIntraParagraph(row.label, {
+                  bold: true,
+                  color: formColors[index % formColors.length],
+                  keepNext: true,
+                  spacingAfter: 70,
+                }),
+                this.renderIntraParagraph(row.value, {
+                  justify: true,
+                  spacingAfter: 180,
+                }),
+              ].join(''),
+            )
+            .join('')
+        : this.renderIntraParagraph('-', { spacingAfter: 0 });
+
+    return this.renderIntraTable(
+      [
+        headerRows,
+        `<w:tr>${this.renderIntraContentCell(formContent, {
+          width: 9000,
+        })}</w:tr>`,
+      ].join(''),
+      [9000],
+    );
+  }
+
+  private renderIntraContentCell(
+    content: string,
+    options: { fill?: string; gridSpan?: number; width: number },
+  ): string {
+    return `<w:tc><w:tcPr><w:tcW w:w="${options.width}" w:type="dxa"/>${
+      options.gridSpan ? `<w:gridSpan w:val="${options.gridSpan}"/>` : ''
+    }${
+      options.fill ? `<w:shd w:fill="${options.fill}"/>` : ''
+    }<w:vAlign w:val="top"/></w:tcPr>${content}</w:tc>`;
+  }
+
+  private renderIntraDefinitionList(rows: IntraFinalTableRow[]): string {
+    return rows
+      .map((row) =>
+        [
+          this.renderIntraParagraph(row.label, {
+            bold: true,
+            color: TEMPLATE_BLUE,
+            spacingAfter: 70,
+          }),
+          this.renderIntraParagraph(row.value, {
+            justify: true,
+            spacingAfter: 130,
+          }),
+        ].join(''),
+      )
+      .join('');
+  }
+
+  private renderIntraBulletList(
+    items: string[],
+    options: { bulletIndent?: number; spacingAfter?: number } = {},
+  ): string {
+    return items
+      .map((item) =>
+        this.renderIntraParagraph(`• ${item}`, {
+          indentLeft: options.bulletIndent ?? 280,
+          justify: true,
+          spacingAfter: options.spacingAfter ?? 80,
+        }),
+      )
+      .join('');
+  }
+
+  private renderIntraPlainList(items: string[]): string {
+    return items
+      .map((item) =>
+        this.renderIntraParagraph(item, {
+          spacingAfter: 60,
+        }),
+      )
+      .join('');
+  }
+
+  private renderIntraNumberedList(items: string[]): string {
+    return items
+      .map((item, index) =>
+        this.renderIntraParagraph(`${index + 1}. ${item}`, {
+          indentLeft: 260,
+          spacingAfter: 70,
+        }),
+      )
+      .join('');
+  }
+
+  private renderIntraMeetingHeader(meeting: IntraFinalMeeting): string {
+    const meetingTitle = `Pertemuan ${meeting.order} - ${meeting.title}`;
+
+    return [
+      this.renderDocxTocEntryField(meetingTitle, 2),
+      this.renderIntraTable(
+        `<w:tr>${this.renderIntraCell(`D.${meeting.order}`, {
+          align: 'center',
+          bold: true,
+          color: TEMPLATE_BLUE,
+          fill: 'F8FAFA',
+          width: 1500,
+        })}${this.renderIntraCell(meetingTitle, {
+          align: 'center',
+          bold: true,
+          color: TEMPLATE_BLUE,
+          fill: 'F8FAFA',
+          outlineLevel: 1,
+          width: 7500,
+        })}</w:tr>`,
+        [1500, 7500],
+      ),
+    ].join('');
+  }
+
+  private renderIntraDifferentiationTable(meeting: IntraFinalMeeting): string {
+    return [
+      this.renderIntraParagraph('Diferensiasi Tahap Aplikasi', {
+        align: 'center',
+        bold: true,
+        spacingBefore: 160,
+        spacingAfter: 120,
+      }),
+      this.renderIntraBorderlessTable(
+        `<w:tr><w:trPr><w:trHeight w:val="1760" w:hRule="atLeast"/></w:trPr>${this.renderIntraDifferentiationCardCell(
+          {
+            label: 'A',
+            title: 'Aplikasi Kelompok A',
+            body: meeting.applying.advancedGroup,
+            fill: 'EEF6E5',
+            border: '8DBB55',
+            badge: '4F6F25',
+            width: 4320,
+          },
+        )}${this.renderIntraSpacerCell(360)}${this.renderIntraDifferentiationCardCell(
+          {
+            label: 'B',
+            title: 'Aplikasi Kelompok B',
+            body: meeting.applying.supportGroup,
+            fill: 'E7F0FA',
+            border: '4E82C3',
+            badge: '1F4E83',
+            width: 4320,
+          },
+        )}</w:tr>`,
+        [4320, 360, 4320],
+      ),
+    ].join('');
+  }
+
+  private renderIntraDifferentiationCardCell(options: {
+    label: 'A' | 'B';
+    title: string;
+    body: string;
+    fill: string;
+    border: string;
+    badge: string;
+    width: number;
+  }): string {
+    const content = [
+      this.renderIntraDifferentiationCardHeader(
+        options.label,
+        options.title,
+        options.badge,
+      ),
+      this.renderIntraParagraph(options.body || '-', {
+        color: '000000',
+        justify: true,
+        line: 285,
+        size: 22,
+        spacingAfter: 0,
+        spacingBefore: 130,
+      }),
+    ].join('');
+
+    return `<w:tc><w:tcPr><w:tcW w:w="${options.width}" w:type="dxa"/><w:shd w:fill="${options.fill}"/><w:vAlign w:val="top"/><w:tcBorders><w:top w:val="single" w:sz="8" w:color="${options.border}"/><w:left w:val="single" w:sz="8" w:color="${options.border}"/><w:bottom w:val="single" w:sz="8" w:color="${options.border}"/><w:right w:val="single" w:sz="8" w:color="${options.border}"/></w:tcBorders><w:tcMar><w:top w:w="220" w:type="dxa"/><w:left w:w="250" w:type="dxa"/><w:bottom w:w="220" w:type="dxa"/><w:right w:w="250" w:type="dxa"/></w:tcMar></w:tcPr>${content}</w:tc>`;
+  }
+
+  private renderIntraDifferentiationCardHeader(
+    label: 'A' | 'B',
+    title: string,
+    badgeFill: string,
+  ): string {
+    return this.renderIntraBorderlessTable(
+      `<w:tr>${this.renderIntraBadgeCell(label, badgeFill)}${this.renderIntraSpacerCell(
+        160,
+      )}${this.renderIntraContentCell(
+        this.renderIntraParagraph(title, {
+          bold: true,
+          color: '000000',
+          line: 280,
+          size: 24,
+          spacingAfter: 0,
+        }),
+        {
+          width: 2940,
+        },
+      )}</w:tr>`,
+      [620, 160, 2940],
+      3720,
+    );
+  }
+
+  private renderIntraBadgeCell(label: string, fill: string): string {
+    return `<w:tc><w:tcPr><w:tcW w:w="520" w:type="dxa"/><w:shd w:fill="${fill}"/><w:vAlign w:val="center"/><w:tcMar><w:top w:w="90" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tcMar></w:tcPr>${this.renderIntraParagraph(
+      label,
+      {
+        align: 'center',
+        bold: true,
+        color: 'FFFFFF',
+        line: 240,
+        size: 20,
+        spacingAfter: 0,
+      },
+    )}</w:tc>`;
+  }
+
+  private renderIntraSpacerCell(width: number): string {
+    return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/><w:tcBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/></w:tcBorders></w:tcPr><w:p/></w:tc>`;
+  }
+
+  private renderIntraBorderlessTable(
+    rows: string,
+    grid: number[],
+    width = 9000,
+  ): string {
+    return `<w:tbl><w:tblPr><w:tblW w:w="${width}" w:type="dxa"/><w:jc w:val="center"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid
+      .map((item) => `<w:gridCol w:w="${item}"/>`)
+      .join('')}</w:tblGrid>${rows}</w:tbl>`;
+  }
+
+  private renderIntraReflectionTable(questions: string[]): string {
+    return this.renderIntraTable(
+      (questions.length ? questions : ['Apakah tujuan pembelajaran tercapai?'])
+        .map(
+          (question) =>
+            `<w:tr>${this.renderIntraCell(question, {
+              bold: true,
+              color: TEMPLATE_BLUE,
+              fill: 'F8FAFA',
+              width: 3100,
+            })}${this.renderIntraCell('', { width: 5900 })}</w:tr>`,
+        )
+        .join(''),
+      [3100, 5900],
+    );
   }
 
   private renderLkpdDocx(data: LkpdDocumentData): Buffer {
@@ -985,6 +3017,72 @@ ${pageOne}${pageTwo}${pageThree}
     return readFileSync(coverPath);
   }
 
+  private loadQuestionIconImage(): Buffer | undefined {
+    const candidates = [
+      resolve(__dirname, 'assets/questionicon.png'),
+      resolve(process.cwd(), 'src/modules/documents/assets/questionicon.png'),
+      resolve(process.cwd(), 'assets/documents/questionicon.png'),
+      resolve(process.cwd(), 'questionicon.png'),
+      resolve(process.cwd(), '../questionicon.png'),
+    ];
+    const iconPath = candidates.find(
+      (candidate) => candidate.endsWith('.png') && existsSync(candidate),
+    );
+
+    if (!iconPath) {
+      this.logger.warn(
+        'questionicon.png tidak ditemukan. Box diagnostik dibuat tanpa icon.',
+      );
+      return undefined;
+    }
+
+    return readFileSync(iconPath);
+  }
+
+  private loadWarningIconImage(): Buffer | undefined {
+    const candidates = [
+      resolve(__dirname, 'assets/warningicon.png'),
+      resolve(process.cwd(), 'src/modules/documents/assets/warningicon.png'),
+      resolve(process.cwd(), 'assets/documents/warningicon.png'),
+      resolve(process.cwd(), 'warningicon.png'),
+      resolve(process.cwd(), '../warningicon.png'),
+    ];
+    const iconPath = candidates.find(
+      (candidate) => candidate.endsWith('.png') && existsSync(candidate),
+    );
+
+    if (!iconPath) {
+      this.logger.warn(
+        'warningicon.png tidak ditemukan. Box catatan guru dibuat tanpa icon.',
+      );
+      return undefined;
+    }
+
+    return readFileSync(iconPath);
+  }
+
+  private loadBookIconImage(): Buffer | undefined {
+    const candidates = [
+      resolve(__dirname, 'assets/bookicon.png'),
+      resolve(process.cwd(), 'src/modules/documents/assets/bookicon.png'),
+      resolve(process.cwd(), 'assets/documents/bookicon.png'),
+      resolve(process.cwd(), 'bookicon.png'),
+      resolve(process.cwd(), '../bookicon.png'),
+    ];
+    const iconPath = candidates.find(
+      (candidate) => candidate.endsWith('.png') && existsSync(candidate),
+    );
+
+    if (!iconPath) {
+      this.logger.warn(
+        'bookicon.png tidak ditemukan. Box ketentuan sumatif dibuat tanpa icon.',
+      );
+      return undefined;
+    }
+
+    return readFileSync(iconPath);
+  }
+
   private loadPdfCoverImage(): PdfCoverImage | undefined {
     const coverImage = this.loadCoverImage();
     if (!coverImage) {
@@ -1103,7 +3201,7 @@ ${pageOne}${pageTwo}${pageThree}
     const timeAllocation = this.usableMetadataValue(identity.timeAllocation);
     const classLabel = gradeLevel
       ? `${educationLevel || 'Kelas'} ${gradeLevel}`.trim()
-      : [educationLevel, phase].filter(Boolean).join(' - ') || subject || 'RPP';
+      : [educationLevel, phase].filter(Boolean).join(' - ') || subject || 'RPM';
     const meetingLabel =
       meetingCount && timeAllocation
         ? `${meetingCount} Pertemuan x ${timeAllocation}`
@@ -1116,7 +3214,7 @@ ${pageOne}${pageTwo}${pageThree}
 
     commands.push(
       this.pdfCenteredTextCommand(
-        'RPP - Intrakurikuler',
+        'RPM - Intrakurikuler',
         710,
         16,
         'F2',
@@ -1188,7 +3286,7 @@ ${pageOne}${pageTwo}${pageThree}
     const timeAllocation = this.usableMetadataValue(identity.timeAllocation);
     const classLabel = gradeLevel
       ? `${educationLevel || 'Kelas'} ${gradeLevel}`.trim()
-      : [educationLevel, phase].filter(Boolean).join(' - ') || subject || 'RPP';
+      : [educationLevel, phase].filter(Boolean).join(' - ') || subject || 'RPM';
     const meetingLabel =
       meetingCount && timeAllocation
         ? `${meetingCount} Pertemuan x ${timeAllocation}`
@@ -1199,7 +3297,7 @@ ${pageOne}${pageTwo}${pageThree}
 
     return [
       withImage ? this.renderDocxCoverImage() : '',
-      this.renderDocxParagraph('RPP - Intrakurikuler', {
+      this.renderDocxParagraph('RPM - Intrakurikuler', {
         align: 'center',
         bold: true,
         color: TEMPLATE_GREEN,
@@ -1296,7 +3394,7 @@ ${pageOne}${pageTwo}${pageThree}
     const footerTitle = this.coverTitle(title, identity);
 
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="0"/></w:pPr>${this.renderDocxRuns(
-      `RPP Intrakurikuler - ${footerTitle} | Halaman `,
+      `RPM Intrakurikuler - ${footerTitle} | Halaman `,
       {
         color: '6B7280',
         size: 18,
@@ -1323,6 +3421,28 @@ ${pageOne}${pageTwo}${pageThree}
 
   private renderDocxPageBreak(): string {
     return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  }
+
+  private renderDocxAutomaticTableOfContents(): string {
+    return `<w:p><w:pPr><w:spacing w:before="0" w:after="120" w:line="300" w:lineRule="auto"/></w:pPr><w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r><w:r><w:instrText xml:space="preserve">TOC \\o "1-2" \\h \\z \\u \\f</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${this.renderIntraRuns(
+      'Daftar isi akan diperbarui otomatis saat dokumen dibuat.',
+      {
+        color: TEMPLATE_BLUE,
+        size: 22,
+      },
+    )}<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
+  }
+
+  private renderDocxTocEntryField(text: string, level: 1 | 2): string {
+    const instruction = `TC "${text.replace(/"/g, "'")}" \\l ${level}`;
+
+    return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/></w:pPr><w:fldSimple w:instr="${this.escapeXml(
+      instruction,
+    )}"><w:r><w:rPr><w:vanish/></w:rPr><w:t> </w:t></w:r></w:fldSimple></w:p>`;
+  }
+
+  private renderDocxUpdateFieldsSettings(): string {
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/></w:settings>';
   }
 
   private renderDocxSectionBreak(margins: {
@@ -1652,7 +3772,7 @@ ${pageOne}${pageTwo}${pageThree}
       timeAllocation: 'Alokasi Waktu',
       meetingCount: 'Jumlah Pertemuan',
       academicYear: 'Tahun Ajaran',
-      rppType: 'Jenis RPP',
+      rppType: 'Jenis RPM',
     };
 
     return (

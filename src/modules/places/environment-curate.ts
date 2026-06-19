@@ -236,5 +236,5 @@ export function buildEnvironmentSummary(
   const categories = [...new Set(places.map((p) => p.category.toLowerCase()))];
   const label = schoolName ? `sekitar ${schoolName}` : 'sekitar lokasi sekolah';
 
-  return `Ditemukan ${places.length} titik ${label} yang relevan untuk pembelajaran berbasis konteks (${categories.slice(0, 3).join(', ')}). Data ini dapat dipakai AI untuk menyusun RPP yang terhubung dengan lingkungan nyata murid.`;
+  return `Ditemukan ${places.length} titik ${label} yang relevan untuk pembelajaran berbasis konteks (${categories.slice(0, 3).join(', ')}). Data ini dapat dipakai AI untuk menyusun RPM yang terhubung dengan lingkungan nyata murid.`;
 }

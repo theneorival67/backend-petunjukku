@@ -25,7 +25,7 @@ export class KinaChatMessageDto {
 export class KinaChatDto {
   @ApiPropertyOptional({
     description:
-      'Project RPP yang sedang dibahas. Jika dikirim, backend memvalidasi project milik user login dan menambahkan konteks project.',
+      'Project RPM yang sedang dibahas. Jika dikirim, backend memvalidasi project milik user login dan menambahkan konteks project.',
   })
   @IsOptional()
   @IsString()

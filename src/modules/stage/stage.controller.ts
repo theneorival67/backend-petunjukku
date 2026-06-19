@@ -20,7 +20,7 @@ import { StageService } from './stage.service';
 export class StageController {
   constructor(private readonly stageService: StageService) {}
 
-  @ApiOperation({ summary: 'Ambil semua stage dari project RPP' })
+  @ApiOperation({ summary: 'Ambil semua stage dari project RPM' })
   @Get()
   findAll(
     @CurrentUser() user: AuthUser,
@@ -39,7 +39,7 @@ export class StageController {
     return this.stageService.findOne(user, projectId, stageNumber);
   }
 
-  @ApiOperation({ summary: 'Simpan atau upsert stage RPP' })
+  @ApiOperation({ summary: 'Simpan atau upsert stage RPM' })
   @Post()
   save(
     @CurrentUser() user: AuthUser,
@@ -49,7 +49,7 @@ export class StageController {
     return this.stageService.save(user, projectId, dto);
   }
 
-  @ApiOperation({ summary: 'Update sebagian data stage RPP' })
+  @ApiOperation({ summary: 'Update sebagian data stage RPM' })
   @Patch(':stageNumber')
   update(
     @CurrentUser() user: AuthUser,

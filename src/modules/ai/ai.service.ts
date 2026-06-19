@@ -229,7 +229,7 @@ export class AiService {
     if (!fastApiPayload) {
       if (requireAi) {
         throw new BadRequestException(
-          'Project RPP wajib tersedia untuk memanggil KINA AI.',
+          'Project RPM wajib tersedia untuk memanggil KINA AI.',
         );
       }
       return {
@@ -298,7 +298,7 @@ export class AiService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     return this.prisma.kinaChat.findMany({
@@ -435,10 +435,31 @@ export class AiService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     const school = project.school ?? project.teacherProfile.school;
+    const teachingContext = this.toJsonObject(
+      project.teacherProfile.teachingContext,
+    );
+    const identityContext = this.toJsonObject(teachingContext.identity);
+    const teacherGender =
+      typeof identityContext.gender === 'string'
+        ? identityContext.gender.trim()
+        : undefined;
+    const teacherFirstName =
+      project.teacherProfile.fullName.trim().split(/\s+/)[0] ||
+      project.teacherProfile.fullName;
+    const teacherSalutationName =
+      teacherGender?.toLowerCase() === 'perempuan'
+        ? `Ibu ${teacherFirstName}`
+        : teacherGender?.toLowerCase() === 'laki-laki'
+          ? `Bapak ${teacherFirstName}`
+          : teacherFirstName;
+    const sanitizeLegacyTeacherName = (content: string) =>
+      content
+        .replace(/\b(?:Ibu|Bapak|Bu|Pak)\s+Vica\b/g, teacherSalutationName)
+        .replace(/\bVica\b/g, teacherFirstName);
 
     return {
       project: {
@@ -459,6 +480,7 @@ export class AiService {
       },
       teacherProfile: {
         fullName: project.teacherProfile.fullName,
+        gender: teacherGender || undefined,
         position: project.teacherProfile.position,
         educationLevel: project.teacherProfile.educationLevel,
         teachingExperienceYears: project.teacherProfile.teachingExperienceYears,
@@ -502,7 +524,7 @@ export class AiService {
       })),
       chatHistory: history.map((chat) => ({
         role: chat.role,
-        message: chat.content,
+        message: sanitizeLegacyTeacherName(chat.content),
       })),
     };
   }
@@ -529,7 +551,7 @@ export class AiService {
         : null;
 
       if (projectId && !project) {
-        throw new NotFoundException('Project RPP tidak ditemukan.');
+        throw new NotFoundException('Project RPM tidak ditemukan.');
       }
 
       if (!profile && !project) {
@@ -540,8 +562,8 @@ export class AiService {
         profile?.fullName ? `Nama guru: ${profile.fullName}` : null,
         profile?.school?.name ? `Sekolah: ${profile.school.name}` : null,
         profile?.school?.city ? `Kota: ${profile.school.city}` : null,
-        project ? `Project RPP: ${project.title}` : null,
-        project ? `Jenis RPP: ${project.rppType}` : null,
+        project ? `Project RPM: ${project.title}` : null,
+        project ? `Jenis RPM: ${project.rppType}` : null,
         project ? `Mapel: ${project.subject}` : null,
         project?.phase ? `Fase: ${project.phase}` : null,
         project?.gradeLevel ? `Kelas: ${project.gradeLevel}` : null,
@@ -567,12 +589,12 @@ export class AiService {
   private fallbackKinaReply(userText: string): string {
     const lower = userText.toLowerCase();
     if (lower.includes('rpp') || lower.includes('rencana')) {
-      return 'Untuk menyusun RPP, pilih kartu Pembelajaran Intrakurikuler atau Kokurikuler di atas. KINA akan memandu langkah demi langkah di Studio Guru.';
+      return 'Untuk menyusun RPM, pilih kartu Pembelajaran Intrakurikuler atau Kokurikuler di atas. KINA akan memandu langkah demi langkah di Studio Guru.';
     }
     if (lower.includes('halo') || lower.includes('hai')) {
       return 'Halo! Saya KINA, asisten Studio Guru PetunjukKU. Ada yang ingin Anda kerjakan hari ini?';
     }
-    return 'Terima kasih atas pertanyaannya. Untuk menyusun RPP terstruktur, silakan buka Studio Guru lewat kartu Intrakurikuler atau Kokurikuler. Saya juga bisa menjawab pertanyaan singkat tentang perencanaan pembelajaran—coba tanyakan lagi setelah layanan AI aktif.';
+    return 'Terima kasih atas pertanyaannya. Untuk menyusun RPM terstruktur, silakan buka Studio Guru lewat kartu Intrakurikuler atau Kokurikuler. Saya juga bisa menjawab pertanyaan singkat tentang perencanaan pembelajaran—coba tanyakan lagi setelah layanan AI aktif.';
   }
 
   async curateSchoolEnvironment(input: {
@@ -726,11 +748,13 @@ export class AiService {
 
   async generateRpp(user: AuthUser, projectId: string) {
     const context = await this.buildRppGenerationContext(user, projectId);
+    const aiCfg = this.configService.get('ai', { infer: true })!;
 
     const response =
       await this.aiGateway.postInternal<GenerateRppFastApiResponse>(
         'internal/ai/generate-rpp',
         context as Record<string, unknown>,
+        { timeoutMs: aiCfg.generateRequestTimeoutMs },
       );
 
     if (!response.contentJson || typeof response.contentJson !== 'object') {
@@ -824,7 +848,7 @@ export class AiService {
     });
 
     if (!existing) {
-      throw new NotFoundException('Generated RPP tidak ditemukan.');
+      throw new NotFoundException('RPM yang dihasilkan tidak ditemukan.');
     }
 
     return this.prisma.generatedRpp.update({
@@ -857,7 +881,7 @@ export class AiService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     return project;
@@ -896,7 +920,7 @@ export class AiService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     const chatSummary = await this.prisma.kinaChat.findMany({

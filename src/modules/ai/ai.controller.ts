@@ -48,7 +48,7 @@ export class AiController {
   }
 
   @Get('kina/chats/:projectId')
-  @ApiOperation({ summary: 'Ambil riwayat chat KINA untuk project RPP' })
+  @ApiOperation({ summary: 'Ambil riwayat chat KINA untuk project RPM' })
   kinaHistory(
     @CurrentUser() user: AuthUser,
     @Param('projectId') projectId: string,
@@ -57,7 +57,7 @@ export class AiController {
   }
 
   @Delete('kina/chats/:projectId')
-  @ApiOperation({ summary: 'Hapus riwayat chat KINA untuk project RPP' })
+  @ApiOperation({ summary: 'Hapus riwayat chat KINA untuk project RPM' })
   clearKinaHistory(
     @CurrentUser() user: AuthUser,
     @Param('projectId') projectId: string,
@@ -77,7 +77,7 @@ export class AiController {
 
   @Post('generate-rpp/:projectId')
   @ApiOperation({
-    summary: 'Generate dokumen RPP final',
+    summary: 'Generate dokumen RPM final',
     description:
       'Mengambil konteks project, stages, chat, referensi, dan konteks sekolah lalu meneruskan payload ke FastAPI internal.',
   })
@@ -90,7 +90,7 @@ export class AiController {
 
   @Get('generated-rpp/:projectId')
   @ApiOperation({
-    summary: 'Ambil hasil generated RPP milik project',
+    summary: 'Ambil hasil generated RPM milik project',
   })
   getGeneratedRpp(
     @CurrentUser() user: AuthUser,
@@ -101,7 +101,7 @@ export class AiController {
 
   @Put('generated-rpp/:generatedRppId')
   @ApiOperation({
-    summary: 'Update hasil generated RPP',
+    summary: 'Update hasil generated RPM',
   })
   updateGeneratedRpp(
     @CurrentUser() user: AuthUser,

@@ -15,6 +15,12 @@ export const aiConfig = registerAs('ai', () => {
       process.env.AI_REQUEST_TIMEOUT_MS ?? '60000',
       10,
     ),
+    generateRequestTimeoutMs: parseInt(
+      process.env.AI_GENERATE_REQUEST_TIMEOUT_MS ??
+        process.env.AI_REQUEST_TIMEOUT_MS ??
+        '600000',
+      10,
+    ),
     aiServiceBaseUrl,
     internalApiKey: process.env.INTERNAL_API_KEY?.trim() ?? '',
     ragBaseUrl: aiServiceBaseUrl,

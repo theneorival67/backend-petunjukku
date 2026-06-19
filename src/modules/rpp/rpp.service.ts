@@ -96,6 +96,92 @@ export class RppService {
     return {};
   }
 
+  private normalizeSubjectText(value?: string | null) {
+    return (value ?? '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  }
+
+  private fallbackLintasDisiplinSubjects(
+    subject?: string | null,
+    topic?: string | null,
+    profilLulusan: string[] = [],
+  ) {
+    const context = this.normalizeSubjectText(
+      `${subject ?? ''} ${topic ?? ''} ${profilLulusan.join(' ')}`,
+    );
+    const currentSubject = this.normalizeSubjectText(subject);
+    const catalog = [
+      { id: 'bahasa_indonesia', label: 'Bahasa Indonesia' },
+      { id: 'informatika', label: 'Informatika' },
+      { id: 'matematika', label: 'Matematika' },
+      { id: 'ipas', label: 'IPAS' },
+      { id: 'seni_budaya', label: 'Seni Budaya' },
+      { id: 'pendidikan_pancasila', label: 'Pendidikan Pancasila' },
+      { id: 'bahasa_inggris', label: 'Bahasa Inggris' },
+      { id: 'prakarya', label: 'Prakarya' },
+      { id: 'pjok', label: 'PJOK' },
+      { id: 'ips', label: 'IPS' },
+    ];
+    const priority = [
+      ...(context.includes('matematika') || context.includes('aljabar')
+        ? ['informatika', 'bahasa_indonesia', 'seni_budaya', 'ipas', 'prakarya']
+        : []),
+      ...(context.includes('ipa') ||
+      context.includes('biologi') ||
+      context.includes('fisika') ||
+      context.includes('kimia')
+        ? ['matematika', 'informatika', 'bahasa_indonesia', 'prakarya', 'pjok']
+        : []),
+      ...(context.includes('bahasa')
+        ? [
+            'seni_budaya',
+            'pendidikan_pancasila',
+            'informatika',
+            'ips',
+            'bahasa_inggris',
+          ]
+        : []),
+      ...(context.includes('kolaborasi') || context.includes('komunikasi')
+        ? ['bahasa_indonesia', 'pendidikan_pancasila', 'seni_budaya']
+        : []),
+      'bahasa_indonesia',
+      'informatika',
+      'matematika',
+      'seni_budaya',
+      'pendidikan_pancasila',
+      'ipas',
+      'prakarya',
+      'bahasa_inggris',
+      'pjok',
+      'ips',
+    ];
+    const picked = new Set<string>();
+    const currentWords = currentSubject.split(/\s+/).filter(Boolean);
+
+    for (const id of priority) {
+      const item = catalog.find((candidate) => candidate.id === id);
+      if (!item || picked.has(item.id)) {
+        continue;
+      }
+      const label = this.normalizeSubjectText(item.label);
+      if (
+        currentSubject &&
+        (label === currentSubject ||
+          currentWords.some((word) => word.length > 3 && label.includes(word)))
+      ) {
+        continue;
+      }
+      picked.add(item.id);
+      if (picked.size >= 5) {
+        break;
+      }
+    }
+
+    return catalog.filter((item) => picked.has(item.id)).slice(0, 5);
+  }
+
   private toStringList(value: unknown): string[] {
     if (Array.isArray(value)) {
       return value
@@ -179,9 +265,9 @@ export class RppService {
         school: true,
         teacherSubject: true,
         teacherClass: true,
-        _count: {
-          select: {
-            stages: true,
+        stages: {
+          orderBy: {
+            stageNumber: 'asc',
           },
         },
       },
@@ -212,7 +298,7 @@ export class RppService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     return project;
@@ -398,7 +484,7 @@ export class RppService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     const stage1 = project.stages.find((stage) => stage.stageNumber === 1);
@@ -545,66 +631,22 @@ export class RppService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     if (project.rppType !== RppType.intrakurikuler) {
       throw new BadRequestException(
-        'Rekomendasi lintas disiplin saat ini hanya tersedia untuk RPP intrakurikuler.',
+        'Rekomendasi lintas disiplin saat ini hanya tersedia untuk RPM intrakurikuler.',
       );
     }
 
-    const payload = {
-      project: {
-        id: project.id,
-        title: project.title,
-        rppType: project.rppType,
-        subject: project.subject,
-        phase: project.phase,
-        gradeLevel: project.gradeLevel,
-        topic: project.topic,
-      },
-      teacherProfile: {
-        fullName: project.teacherProfile.fullName,
-        position: project.teacherProfile.position,
-        educationLevel: project.teacherProfile.educationLevel,
-      },
-      school: project.school
-        ? {
-            name: project.school.name,
-            province: project.school.province,
-            city: project.school.city,
-            schoolEnvironment: project.school.schoolEnvironment,
-            localContext: project.school.localContext,
-          }
-        : null,
-      teacherClass: project.teacherClass
-        ? {
-            className: project.teacherClass.className,
-            gradeLevel: project.teacherClass.gradeLevel,
-            studentCount: project.teacherClass.studentCount,
-            studentCharacteristics:
-              project.teacherClass.studentCharacteristics,
-          }
-        : null,
-      previousStages: project.stages
-        .filter((stage) => stage.stageNumber < 2)
-        .map((stage) => ({
-          stageNumber: stage.stageNumber,
-          stageName: stage.stageName,
-          contentJson: this.toJsonObject(stage.contentJson),
-          isCompleted: stage.isCompleted,
-        })),
-      profilLulusan,
-      options: {
-        language: 'id',
-        outputFormat: 'json',
-      },
+    return {
+      subjects: this.fallbackLintasDisiplinSubjects(
+        project.subject,
+        project.topic,
+        profilLulusan,
+      ),
+      source: 'be_fallback',
     };
-
-    return this.aiGateway.postInternal<LintasDisiplinRecommendationResponseDto>(
-      'internal/ai/recommend-lintas-disiplin',
-      payload,
-    );
   }
 }

@@ -93,7 +93,7 @@ Tujuan:
 
 API key Google hanya berada di backend sebagai `GOOGLE_MAPS_API_KEY`.
 
-## RPP Projects
+## RPM Projects
 
 ```http
 POST /rpp/projects
@@ -107,7 +107,7 @@ DELETE /rpp/projects/:id
 
 Archive memakai soft status `archived`. Delete menghapus permanen.
 
-## RPP Stages
+## RPM Stages
 
 ```http
 GET /rpp/projects/:projectId/stages
@@ -178,7 +178,7 @@ POST /internal/ai/kina/session-title
 
 - menyimpan pesan user dan jawaban assistant ke `kina_chats`.
 
-## Generated RPP
+## Generated RPM
 
 ```http
 POST /ai/generate-rpp/:projectId
@@ -211,7 +211,7 @@ GET /documents/download/:documentId
 
 NestJS:
 
-- validasi generated RPP milik user login,
+- validasi generated RPM milik user login,
 - render PDF/DOCX,
 - upload ke Supabase Storage bucket `documents`,
 - simpan metadata ke `exported_documents`,

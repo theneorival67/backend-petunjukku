@@ -12,7 +12,7 @@ export class WorkspaceController {
 
   @Get('projects')
   @ApiOperation({
-    summary: 'Ambil project RPP untuk workspace user login',
+    summary: 'Ambil project RPM untuk workspace user login',
     description:
       'Workspace tidak memakai tabel khusus; data diambil dari rpp_projects milik user login.',
   })

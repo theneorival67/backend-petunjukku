@@ -24,7 +24,7 @@ export class StageService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project RPP tidak ditemukan.');
+      throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
     return project;
@@ -32,6 +32,26 @@ export class StageService {
 
   private toJsonInput(contentJson: Record<string, unknown>) {
     return contentJson as Prisma.InputJsonObject;
+  }
+
+  private nextProjectStatusAfterStageSave(
+    currentStatus: RppStatus,
+    stageNumber: number,
+    isCompleted?: boolean,
+  ) {
+    if (currentStatus === RppStatus.archived) {
+      return currentStatus;
+    }
+    if (stageNumber >= 5 && isCompleted) {
+      return RppStatus.completed;
+    }
+    if (
+      currentStatus === RppStatus.completed ||
+      currentStatus === RppStatus.generated
+    ) {
+      return currentStatus;
+    }
+    return RppStatus.in_progress;
   }
 
   async findAll(user: AuthUser, projectId: string) {
@@ -60,14 +80,14 @@ export class StageService {
     });
 
     if (!stage) {
-      throw new NotFoundException('Stage RPP tidak ditemukan.');
+      throw new NotFoundException('Stage RPM tidak ditemukan.');
     }
 
     return stage;
   }
 
   async save(user: AuthUser, projectId: string, dto: SaveRppStageDto) {
-    await this.getRppProjectOrThrow(user, projectId);
+    const project = await this.getRppProjectOrThrow(user, projectId);
 
     const stage = await this.prisma.rppStage.upsert({
       where: {
@@ -95,12 +115,16 @@ export class StageService {
         id: projectId,
       },
       data: {
-        status: RppStatus.in_progress,
+        status: this.nextProjectStatusAfterStageSave(
+          project.status,
+          dto.stageNumber,
+          dto.isCompleted,
+        ),
       },
     });
 
     return {
-      message: 'Stage RPP berhasil disimpan.',
+      message: 'Stage RPM berhasil disimpan.',
       stage,
     };
   }
@@ -111,7 +135,7 @@ export class StageService {
     stageNumber: number,
     dto: UpdateRppStageDto,
   ) {
-    await this.getRppProjectOrThrow(user, projectId);
+    const project = await this.getRppProjectOrThrow(user, projectId);
 
     const existingStage = await this.prisma.rppStage.findUnique({
       where: {
@@ -123,7 +147,7 @@ export class StageService {
     });
 
     if (!existingStage) {
-      throw new NotFoundException('Stage RPP tidak ditemukan.');
+      throw new NotFoundException('Stage RPM tidak ditemukan.');
     }
 
     const stage = await this.prisma.rppStage.update({
@@ -151,12 +175,16 @@ export class StageService {
         id: projectId,
       },
       data: {
-        status: RppStatus.in_progress,
+        status: this.nextProjectStatusAfterStageSave(
+          project.status,
+          stageNumber,
+          dto.isCompleted ?? existingStage.isCompleted,
+        ),
       },
     });
 
     return {
-      message: 'Stage RPP berhasil diperbarui.',
+      message: 'Stage RPM berhasil diperbarui.',
       stage,
     };
   }

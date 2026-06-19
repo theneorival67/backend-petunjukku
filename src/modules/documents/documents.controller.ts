@@ -12,9 +12,9 @@ export class DocumentsController {
 
   @Post('export/pdf/:generatedRppId')
   @ApiOperation({
-    summary: 'Export generated RPP ke PDF',
+    summary: 'Export generated RPM ke PDF',
     description:
-      'Mengambil generated RPP, render ke PDF, upload ke Supabase Storage, lalu simpan metadata exported_documents.',
+      'Mengambil RPM yang dihasilkan, render ke PDF, upload ke Supabase Storage, lalu simpan metadata exported_documents.',
   })
   exportPdf(
     @CurrentUser() user: AuthUser,
@@ -25,9 +25,9 @@ export class DocumentsController {
 
   @Post('export/docx/:generatedRppId')
   @ApiOperation({
-    summary: 'Export generated RPP ke DOCX',
+    summary: 'Export generated RPM ke DOCX',
     description:
-      'Mengambil generated RPP, render ke DOCX, upload ke Supabase Storage, lalu simpan metadata exported_documents.',
+      'Mengambil RPM yang dihasilkan, render ke DOCX, upload ke Supabase Storage, lalu simpan metadata exported_documents.',
   })
   exportDocx(
     @CurrentUser() user: AuthUser,
@@ -40,7 +40,7 @@ export class DocumentsController {
   @ApiOperation({
     summary: 'Export asesmen LKPD intrakurikuler ke DOCX',
     description:
-      'Membuat dokumen LKPD terpisah dari generated RPP dengan layout lembar kerja siap cetak.',
+      'Membuat dokumen LKPD terpisah dari RPM yang dihasilkan dengan layout lembar kerja siap cetak.',
   })
   exportLkpdDocx(
     @CurrentUser() user: AuthUser,

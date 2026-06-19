@@ -14,7 +14,7 @@ import {
 
 export class CreateRppProjectDto {
   @ApiProperty({
-    example: 'RPP Sistem Pencernaan Manusia',
+    example: 'RPM Sistem Pencernaan Manusia',
     minLength: 3,
     maxLength: 200,
   })
@@ -26,7 +26,7 @@ export class CreateRppProjectDto {
   @ApiProperty({
     enum: RppType,
     example: RppType.intrakurikuler,
-    description: 'Jenis RPP: intrakurikuler atau pjbl_kokurikuler',
+    description: 'Jenis RPM: intrakurikuler atau pjbl_kokurikuler',
   })
   @IsEnum(RppType)
   rppType: RppType;

@@ -23,13 +23,13 @@ import { RppService } from './rpp.service';
 export class RppController {
   constructor(private readonly rppService: RppService) {}
 
-  @ApiOperation({ summary: 'Buat project RPP baru' })
+  @ApiOperation({ summary: 'Buat project RPM baru' })
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateRppProjectDto) {
     return this.rppService.create(user, dto);
   }
 
-  @ApiOperation({ summary: 'Ambil semua project RPP milik user login' })
+  @ApiOperation({ summary: 'Ambil semua project RPM milik user login' })
   @Get()
   findMine(
     @CurrentUser() user: AuthUser,
@@ -38,7 +38,7 @@ export class RppController {
     return this.rppService.findMine(user, archived === 'true');
   }
 
-  @ApiOperation({ summary: 'Ambil detail project RPP' })
+  @ApiOperation({ summary: 'Ambil detail project RPM' })
   @Get(':id')
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.rppService.findOne(user, id);
@@ -76,7 +76,7 @@ export class RppController {
     );
   }
 
-  @ApiOperation({ summary: 'Update project RPP' })
+  @ApiOperation({ summary: 'Update project RPM' })
   @Patch(':id')
   update(
     @CurrentUser() user: AuthUser,
@@ -86,13 +86,13 @@ export class RppController {
     return this.rppService.update(user, id, dto);
   }
 
-  @ApiOperation({ summary: 'Arsipkan project RPP' })
+  @ApiOperation({ summary: 'Arsipkan project RPM' })
   @Post(':id/archive')
   archive(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.rppService.archive(user, id);
   }
 
-  @ApiOperation({ summary: 'Hapus permanen project RPP' })
+  @ApiOperation({ summary: 'Hapus permanen project RPM' })
   @Delete(':id')
   remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.rppService.remove(user, id);

@@ -34,8 +34,8 @@ File yang diimport:
 11. Simpan Stage 2 dari CP dan TP hasil rekomendasi.
 12. Jalankan KINA Stage 3.
 13. Simpan Stage 3 dan Stage 4.
-14. Generate RPP final.
-15. Ambil generated RPP dan export PDF/DOCX.
+14. Generate RPM final.
+15. Ambil generated RPM dan export PDF/DOCX.
 
 ## Catatan
 

@@ -49,7 +49,7 @@ export class PlacesController {
   @ApiOperation({
     summary: 'Pemindai lingkungan sekitar sekolah',
     description:
-      'Mengambil titik penting dari Google Places lalu mengurasi relevansi pedagogis untuk konteks RPP.',
+      'Mengambil titik penting dari Google Places lalu mengurasi relevansi pedagogis untuk konteks RPM.',
   })
   @ApiOkResponse({ type: EnvironmentScanDto })
   nearbyEnvironment(@Query() query: NearbyEnvironmentQueryDto) {

@@ -431,7 +431,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"title\": \"RPP Polinomial Sederhana\",\n  \"rppType\": \"intrakurikuler\",\n  \"teacherSubjectId\": \"{{teacherSubjectId}}\",\n  \"teacherClassId\": \"{{teacherClassId}}\",\n  \"topic\": \"Polinomial sederhana\",\n  \"totalJp\": 6,\n  \"meetingCount\": 3,\n  \"semester\": \"Semester Ganjil 2025\",\n  \"classConditions\": \"Kelas aktif, perlu latihan bertahap dan contoh kontekstual.\"\n}"
+          "raw": "{\n  \"title\": \"RPM Polinomial Sederhana\",\n  \"rppType\": \"intrakurikuler\",\n  \"teacherSubjectId\": \"{{teacherSubjectId}}\",\n  \"teacherClassId\": \"{{teacherClassId}}\",\n  \"topic\": \"Polinomial sederhana\",\n  \"totalJp\": 6,\n  \"meetingCount\": 3,\n  \"semester\": \"Semester Ganjil 2025\",\n  \"classConditions\": \"Kelas aktif, perlu latihan bertahap dan contoh kontekstual.\"\n}"
         }
       },
       "event": [
@@ -727,7 +727,7 @@
       }
     },
     {
-      "name": "19 Generate RPP Final",
+      "name": "19 Generate RPM Final",
       "request": {
         "method": "POST",
         "header": [],
@@ -757,7 +757,7 @@
       ]
     },
     {
-      "name": "20 Get Generated RPP",
+      "name": "20 Get Generated RPM",
       "request": {
         "method": "GET",
         "header": [],

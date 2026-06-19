@@ -13,7 +13,7 @@ export class SaveRppStageDto {
   @ApiProperty({
     example: 1,
     minimum: 1,
-    description: 'Nomor stage RPP. Contoh: 1, 2, 3, 4, 5',
+    description: 'Nomor stage RPM. Contoh: 1, 2, 3, 4, 5',
   })
   @IsInt()
   @Min(1)

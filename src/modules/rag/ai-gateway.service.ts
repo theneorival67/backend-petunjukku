@@ -44,12 +44,14 @@ export class AiGatewayService {
   async postInternal<TResponse>(
     path: string,
     payload: Record<string, unknown>,
+    options?: { timeoutMs?: number },
   ): Promise<TResponse> {
     const cfg = this.configService.get('ai', { infer: true })!;
     const normalizedPath = path.replace(/^\//, '');
     const url = `${cfg.aiServiceBaseUrl}/${normalizedPath}`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), cfg.requestTimeoutMs);
+    const timeoutMs = options?.timeoutMs ?? cfg.requestTimeoutMs;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -82,7 +84,7 @@ export class AiGatewayService {
       this.logger.warn(
         `AI FastAPI request error ${normalizedPath}: ${
           error instanceof Error ? error.message : error
-        }`,
+        } (timeout ${timeoutMs}ms)`,
       );
       throw new ServiceUnavailableException(
         'Tidak dapat menghubungi layanan AI FastAPI internal.',
