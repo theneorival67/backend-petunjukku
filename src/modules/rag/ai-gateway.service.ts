@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  GatewayTimeoutException,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -78,6 +79,14 @@ export class AiGatewayService {
     } catch (error) {
       if (error instanceof BadGatewayException) {
         throw error;
+      }
+      if (error instanceof Error && error.name === 'AbortError') {
+        this.logger.warn(
+          `AI FastAPI request timeout ${normalizedPath} after ${cfg.requestTimeoutMs}ms`,
+        );
+        throw new GatewayTimeoutException(
+          'Request ke layanan AI melewati batas waktu.',
+        );
       }
       this.logger.warn(
         `AI FastAPI request error ${normalizedPath}: ${
