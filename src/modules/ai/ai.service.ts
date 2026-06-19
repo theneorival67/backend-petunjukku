@@ -13,9 +13,12 @@ import { AiGatewayService } from '../rag/ai-gateway.service';
 import type { KinaChatDto, KinaChatMessageDto } from './dto/kina-chat.dto';
 import type { Stage3DiagramDto } from './dto/stage3-diagram.dto';
 import {
+  ENVIRONMENT_CANDIDATE_LIMIT,
+  buildNearbyPlaceCandidates,
   curateNearbyPlaces,
   formatDistanceLabel,
   type CuratedNearbyPlace,
+  type NearbyPlaceCandidate,
   type RawNearbyPlace,
 } from '../places/environment-curate';
 import type { AiEnvironmentResponseJson } from './ai-environment.types';
@@ -27,11 +30,33 @@ type GenerateRppFastApiResponse = {
   model?: string;
 };
 
+type KinaSummaryFastApiResponse = {
+  summary?: Record<string, unknown>;
+};
+
+type KinaChatProgress = {
+  activeStage?: string;
+  activeLabel?: string;
+  completedCount?: number;
+  totalCount?: number;
+  percentage?: number;
+  isComplete?: boolean;
+  missingSlots?: string[];
+  stages?: {
+    key: string;
+    label: string;
+    complete: boolean;
+    foundSlots?: string[];
+    missingSlots?: string[];
+  }[];
+};
+
 type KinaFastApiResponse = {
   reply?: string;
   model?: string;
   usedReferences?: unknown[];
   suggestedFollowUpQuestions?: string[];
+  progress?: KinaChatProgress;
 };
 
 const ALLOWED_COLOR_KEYS = new Set([
@@ -151,6 +176,7 @@ export class AiService {
     source: 'ai_service' | 'fallback';
     usedReferences?: unknown[];
     suggestedFollowUpQuestions?: string[];
+    progress?: KinaChatProgress;
   }> {
     const projectId = Array.isArray(dto) ? undefined : dto.projectId;
     const requireAi = !Array.isArray(dto) && Boolean(dto.requireAi);
@@ -165,7 +191,9 @@ export class AiService {
     const latestFromMessages = trimmed
       .filter((message) => message.role === 'user')
       .at(-1);
-    const explicitMessage = Array.isArray(dto) ? undefined : dto.message?.trim();
+    const explicitMessage = Array.isArray(dto)
+      ? undefined
+      : dto.message?.trim();
     const latestUserContent = (
       explicitMessage ||
       latestFromMessages?.content ||
@@ -181,18 +209,6 @@ export class AiService {
       };
     }
 
-    const existingHistory = projectId
-      ? (
-          await this.prisma.kinaChat.findMany({
-            where: {
-              userId: user.id,
-              rppProjectId: projectId,
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 40,
-          })
-        ).reverse()
-      : [];
     if (projectId) {
       await this.assertProjectOwner(user, projectId);
     }
@@ -209,10 +225,14 @@ export class AiService {
     }
 
     const fastApiPayload = projectId
-      ? await this.buildKinaFastApiPayload(user, projectId, existingHistory)
+      ? await this.buildKinaFastApiPayload(
+          user,
+          projectId,
+          await this.getLatestKinaHistory(user.id, projectId),
+        )
       : null;
     if (!this.isEnabled()) {
-      if (requireAi) {
+      if (projectId || requireAi) {
         throw new BadRequestException(
           'Layanan AI belum aktif. KINA tidak boleh memakai fallback untuk request ini.',
         );
@@ -240,6 +260,15 @@ export class AiService {
     }
 
     try {
+      const chatHistory = Array.isArray(fastApiPayload.chatHistory)
+        ? fastApiPayload.chatHistory
+        : [];
+      this.logger.debug(
+        `KINA FastAPI request: message="${this.toLogSnippet(
+          latestUserContent,
+        )}", chatHistory=${chatHistory.length}`,
+      );
+
       const response = await this.aiGateway.postInternal<KinaFastApiResponse>(
         'internal/ai/kina-chat',
         {
@@ -249,16 +278,26 @@ export class AiService {
         },
       );
 
-      if (requireAi && !response.reply?.trim()) {
+      if (!response.reply?.trim()) {
         throw new Error('KINA AI mengembalikan respons kosong.');
       }
 
+      const suggestedFollowUpQuestions = this.normalizeSuggestionList(
+        response.suggestedFollowUpQuestions,
+      );
+      this.logger.debug(
+        `KINA FastAPI response: progress=${response.progress?.percentage ?? 'n/a'}, suggestedFollowUpQuestions=${JSON.stringify(
+          suggestedFollowUpQuestions,
+        )}`,
+      );
+
       const result = {
-        reply: response.reply?.trim() || this.fallbackKinaReply(latestUserContent),
+        reply: response.reply.trim(),
         model: response.model ?? 'fastapi',
         source: 'ai_service' as const,
         usedReferences: response.usedReferences ?? [],
-        suggestedFollowUpQuestions: response.suggestedFollowUpQuestions ?? [],
+        suggestedFollowUpQuestions,
+        progress: response.progress,
       };
 
       await this.saveAssistantReply(user.id, projectId, {
@@ -268,6 +307,7 @@ export class AiService {
         metadata: {
           usedReferences: result.usedReferences,
           suggestedFollowUpQuestions: result.suggestedFollowUpQuestions,
+          progress: result.progress,
         },
       });
 
@@ -276,18 +316,9 @@ export class AiService {
       this.logger.warn(
         `KINA chat gagal: ${error instanceof Error ? error.message : error}`,
       );
-      if (requireAi) {
-        throw new BadRequestException(
-          'KINA AI belum berhasil merespons. Periksa konfigurasi AI dan coba lagi.',
-        );
-      }
-      const fallback = {
-        reply: this.fallbackKinaReply(latestUserContent),
-        model: 'fallback',
-        source: 'fallback' as const,
-      };
-      await this.saveAssistantReply(user.id, projectId, fallback);
-      return fallback;
+      throw new BadRequestException(
+        'KINA AI belum berhasil merespons. Periksa konfigurasi AI dan coba lagi.',
+      );
     }
   }
 
@@ -301,13 +332,22 @@ export class AiService {
       throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
-    return this.prisma.kinaChat.findMany({
+    const messages = await this.prisma.kinaChat.findMany({
       where: {
         userId: user.id,
         rppProjectId: projectId,
       },
       orderBy: { createdAt: 'asc' },
     });
+
+    const latestAssistantState = this.getLatestAssistantTurnState(messages);
+
+    return {
+      messages,
+      suggestedFollowUpQuestions:
+        latestAssistantState.suggestedFollowUpQuestions,
+      progress: latestAssistantState.progress,
+    };
   }
 
   async clearKinaHistory(user: AuthUser, projectId: string) {
@@ -392,6 +432,61 @@ export class AiService {
         },
       },
     });
+  }
+
+  private async getLatestKinaHistory(userId: string, projectId: string) {
+    return (
+      await this.prisma.kinaChat.findMany({
+        where: {
+          userId,
+          rppProjectId: projectId,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+      })
+    )
+      .reverse()
+      .map((chat) => ({
+        role: chat.role,
+        content: chat.content,
+      }));
+  }
+
+  private normalizeSuggestionList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((item): item is string => typeof item === 'string');
+  }
+
+  private getLatestAssistantTurnState(
+    messages: Array<{ role: string; metadata: unknown }>,
+  ): {
+    suggestedFollowUpQuestions: string[];
+    progress?: KinaChatProgress;
+  } {
+    const latestMessage = messages.at(-1);
+
+    if (latestMessage?.role !== 'assistant') {
+      return { suggestedFollowUpQuestions: [] };
+    }
+
+    const metadata = this.toJsonObject(latestMessage.metadata);
+
+    return {
+      suggestedFollowUpQuestions: this.normalizeSuggestionList(
+        metadata.suggestedFollowUpQuestions,
+      ),
+      progress:
+        metadata.progress && typeof metadata.progress === 'object'
+          ? (metadata.progress as KinaChatProgress)
+          : undefined,
+    };
+  }
+
+  private toLogSnippet(value: string): string {
+    return value.replace(/\s+/g, ' ').trim().slice(0, 160);
   }
 
   private toJsonObject(value: unknown): Record<string, unknown> {
@@ -509,24 +604,99 @@ export class AiService {
             className: project.teacherClass.className,
             gradeLevel: project.teacherClass.gradeLevel,
             studentCount: project.teacherClass.studentCount,
-            studentCharacteristics:
-              project.teacherClass.studentCharacteristics,
+            studentCharacteristics: project.teacherClass.studentCharacteristics,
             learningChallenges: this.toStringList(
               project.teacherClass.learningChallenges,
             ),
             dominantLearningStyle: project.teacherClass.dominantLearningStyle,
           }
         : {},
-      stages: project.stages.map((stage) => ({
-        stageNumber: stage.stageNumber,
-        stageName: stage.stageName,
-        contentJson: this.toJsonObject(stage.contentJson),
-      })),
+      stages: project.stages
+        .map((stage) => this.toKinaStagePayload(stage))
+        .filter((stage): stage is NonNullable<typeof stage> => Boolean(stage)),
       chatHistory: history.map((chat) => ({
         role: chat.role,
         message: sanitizeLegacyTeacherName(chat.content),
       })),
     };
+  }
+
+  private toKinaStagePayload(stage: {
+    stageNumber: number;
+    stageName: string;
+    contentJson: unknown;
+    isCompleted?: boolean;
+  }):
+    | {
+        stageNumber: number;
+        stageName: string;
+        contentJson: Record<string, unknown>;
+        isCompleted?: boolean;
+      }
+    | null {
+    const contentJson = this.toJsonObject(stage.contentJson);
+
+    if (stage.stageNumber === 1 || stage.stageNumber === 2) {
+      return {
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson,
+        isCompleted: stage.isCompleted,
+      };
+    }
+
+    if (stage.stageNumber === 3) {
+      const summary = this.extractValidStage3Summary(contentJson);
+
+      if (!summary) {
+        return null;
+      }
+
+      return {
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson: summary,
+        isCompleted: stage.isCompleted,
+      };
+    }
+
+    return null;
+  }
+
+  private extractValidStage3Summary(
+    contentJson: Record<string, unknown>,
+  ): Record<string, unknown> | null {
+    const summaryKeys = [
+      'discussionSummary',
+      'learningStrategy',
+      'pedagogicalApproach',
+      'facilityAndTechnologyUse',
+      'digitalPlatform',
+      'partnership',
+      'finalStudentProduct',
+      'activityFlowDecision',
+      'differentiationPlan',
+      'teacherNotes',
+      'stage3CompletionStatus',
+    ];
+    const summary = Object.fromEntries(
+      summaryKeys
+        .filter((key) => contentJson[key] !== undefined)
+        .map((key) => [key, contentJson[key]]),
+    );
+    const hasValidSummary = Object.values(summary).some((value) => {
+      if (typeof value === 'string') {
+        return value.trim().length > 0;
+      }
+
+      return (
+        value !== null &&
+        typeof value === 'object' &&
+        Object.keys(value).length > 0
+      );
+    });
+
+    return hasValidSummary ? summary : null;
   }
 
   private async buildKinaProfileContext(
@@ -613,26 +783,22 @@ export class AiService {
       input.latitude,
       input.longitude,
       input.rawPlaces,
-      8,
+      18,
+    );
+    const candidates = buildNearbyPlaceCandidates(
+      input.latitude,
+      input.longitude,
+      input.rawPlaces,
+      ENVIRONMENT_CANDIDATE_LIMIT,
     );
 
     if (!this.isEnabled()) {
       return {
-        places: ruleBased.slice(0, 6),
+        places: this.limitPlacesPerCategory(ruleBased),
         summary: this.fallbackSummary(ruleBased, input.schoolName),
         usedAi: false,
       };
     }
-
-    const candidates =
-      ruleBased.length >= 4
-        ? ruleBased
-        : curateNearbyPlaces(
-            input.latitude,
-            input.longitude,
-            input.rawPlaces,
-            12,
-          );
 
     if (candidates.length === 0) {
       return {
@@ -645,10 +811,12 @@ export class AiService {
     const candidatePayload = candidates.map((p) => ({
       id: p.id,
       name: p.name,
+      primaryType: p.primaryType,
+      types: p.types,
+      latitude: p.latitude,
+      longitude: p.longitude,
       distanceMeters: p.distanceMeters,
       distanceLabel: p.distanceLabel,
-      category: p.category,
-      colorKey: p.colorKey,
     }));
 
     try {
@@ -662,6 +830,9 @@ export class AiService {
             longitude: input.longitude,
             radiusMeters: input.radiusMeters,
             candidates: candidatePayload,
+            maxPlaces: 18,
+            maxPlacesPerCategory: 3,
+            minCategories: 4,
           },
         );
 
@@ -682,7 +853,7 @@ export class AiService {
         `Kurasi AI gagal, pakai aturan: ${error instanceof Error ? error.message : error}`,
       );
       return {
-        places: ruleBased.slice(0, 6),
+        places: this.limitPlacesPerCategory(ruleBased),
         summary: this.fallbackSummary(ruleBased, input.schoolName),
         usedAi: false,
       };
@@ -690,7 +861,7 @@ export class AiService {
   }
 
   private mergeAiCuration(
-    candidates: CuratedNearbyPlace[],
+    candidates: NearbyPlaceCandidate[],
     ai: AiEnvironmentResponseJson,
   ): { places: CuratedNearbyPlace[]; summary: string } {
     const byId = new Map(candidates.map((p) => [p.id, p]));
@@ -708,27 +879,94 @@ export class AiService {
 
       const colorKey = ALLOWED_COLOR_KEYS.has(row.colorKey ?? '')
         ? (row.colorKey as string)
-        : base.colorKey;
+        : 'gray';
+      const category =
+        row.category?.trim() ||
+        this.categoryLabelFromId(row.categoryId) ||
+        'Lingkungan sekitar';
+      const categoryId =
+        this.normalizeCategoryId(row.categoryId) ??
+        this.normalizeCategoryId(category) ??
+        'umum';
 
       places.push({
         id: base.id,
         name: base.name,
         distanceMeters: base.distanceMeters,
         distanceLabel: formatDistanceLabel(base.distanceMeters),
-        category: row.category?.trim() || base.category,
+        categoryId,
+        category,
         colorKey,
-        relevanceNote: row.relevanceNote?.trim() || base.relevanceNote,
+        relevanceNote:
+          row.relevanceNote?.trim() ||
+          'Dipilih AI sebagai konteks sekitar sekolah yang relevan untuk pembelajaran.',
         relevanceScore:
           typeof row.relevanceScore === 'number'
             ? Math.max(0, Math.min(100, row.relevanceScore))
-            : base.relevanceScore,
+            : 70,
       });
     }
 
     return {
-      places: places.slice(0, 6),
+      places: this.limitPlacesPerCategory(places),
       summary: ai.summary?.trim() ?? '',
     };
+  }
+
+  private limitPlacesPerCategory(
+    places: CuratedNearbyPlace[],
+    totalLimit = 18,
+    perCategoryLimit = 3,
+  ): CuratedNearbyPlace[] {
+    const sorted = [...places].sort((a, b) => {
+      if (b.relevanceScore !== a.relevanceScore) {
+        return b.relevanceScore - a.relevanceScore;
+      }
+      return a.distanceMeters - b.distanceMeters;
+    });
+    const counts = new Map<string, number>();
+    const picked: CuratedNearbyPlace[] = [];
+
+    for (const place of sorted) {
+      if (picked.length >= totalLimit) {
+        break;
+      }
+      const key = place.categoryId || place.category || 'umum';
+      const count = counts.get(key) ?? 0;
+      if (count >= perCategoryLimit) {
+        continue;
+      }
+      counts.set(key, count + 1);
+      picked.push(place);
+    }
+
+    return picked.sort((a, b) => a.distanceMeters - b.distanceMeters);
+  }
+
+  private normalizeCategoryId(value?: string): string | null {
+    const normalized = value
+      ?.trim()
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/&/g, ' dan ')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return normalized || null;
+  }
+
+  private categoryLabelFromId(value?: string): string | null {
+    const id = this.normalizeCategoryId(value);
+    if (!id) {
+      return null;
+    }
+
+    return id
+      .split('-')
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   }
 
   private fallbackSummary(
@@ -749,6 +987,39 @@ export class AiService {
   async generateRpp(user: AuthUser, projectId: string) {
     const context = await this.buildRppGenerationContext(user, projectId);
     const aiCfg = this.configService.get('ai', { infer: true })!;
+
+    if (context.project.rppType === 'pjbl_kokurikuler') {
+      const rawChatHistory = context.kinaChatSummary['rawChatHistory'];
+      const chatHistory = Array.isArray(rawChatHistory) ? rawChatHistory : [];
+
+      if (chatHistory.length > 0 && this.isEnabled()) {
+        try {
+          const summaryResponse =
+            await this.aiGateway.postInternal<KinaSummaryFastApiResponse>(
+              'internal/ai/summarize-kina-chat',
+              {
+                project: context.project,
+                chatHistory,
+                summaryType: 'pjbl_kokurikuler_stage_3',
+              },
+            );
+
+          if (summaryResponse.summary) {
+            context.kinaChatSummary = {
+              ...context.kinaChatSummary,
+              ...summaryResponse.summary,
+              source: 'summarize-kina-chat',
+            };
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Summary Kina PjBL gagal, pakai fallback lokal: ${
+              error instanceof Error ? error.message : error
+            }`,
+          );
+        }
+      }
+    }
 
     const response =
       await this.aiGateway.postInternal<GenerateRppFastApiResponse>(
@@ -931,6 +1202,11 @@ export class AiService {
       orderBy: { createdAt: 'asc' },
       take: 40,
     });
+    const kinaChatHistory = chatSummary.map((chat) => ({
+      role: chat.role,
+      message: chat.content,
+      createdAt: chat.createdAt,
+    }));
 
     const environmentScan =
       project.school?.environmentScans?.[0] ??
@@ -997,8 +1273,7 @@ export class AiService {
             gradeLevel: project.teacherClass.gradeLevel ?? project.gradeLevel,
             academicYear: project.teacherClass.academicYear,
             studentCount: project.teacherClass.studentCount,
-            studentCharacteristics:
-              project.teacherClass.studentCharacteristics,
+            studentCharacteristics: project.teacherClass.studentCharacteristics,
             learningChallenges: this.toStringList(
               project.teacherClass.learningChallenges,
             ),
@@ -1013,9 +1288,13 @@ export class AiService {
         contentJson: stage.contentJson,
         isCompleted: stage.isCompleted,
       })),
-      chatSummary: chatSummary.map((chat) => ({
+      kinaChatSummary: this.buildPjblKinaFallbackSummary(
+        project.rppType,
+        kinaChatHistory,
+      ),
+      chatSummary: kinaChatHistory.map((chat) => ({
         role: chat.role,
-        content: chat.content,
+        content: chat.message,
         createdAt: chat.createdAt,
       })),
       placesContext: environmentScan
@@ -1028,6 +1307,44 @@ export class AiService {
             payload: environmentScan.payload,
           }
         : null,
+    };
+  }
+
+  private buildPjblKinaFallbackSummary(
+    rppType: string,
+    history: Array<{ role: string; message: string; createdAt: Date }>,
+  ): Record<string, unknown> {
+    if (rppType !== 'pjbl_kokurikuler') {
+      return {};
+    }
+
+    const rawText = history
+      .map((chat) => `${chat.role}: ${chat.message}`)
+      .join('\n')
+      .trim();
+    const userMessages = history
+      .filter((chat) => chat.role === 'user')
+      .map((chat) => chat.message.trim())
+      .filter(Boolean);
+    const latestTeacherNotes = userMessages.slice(-5).join(' ');
+    const completePattern =
+      /rancangan proyek .*sudah selesai|siap digunakan|cukup semua|sudah lengkap/i;
+
+    return {
+      rawChatHistory: history.map((chat) => ({
+        role: chat.role,
+        message: chat.message,
+        createdAt: chat.createdAt,
+      })),
+      discussionSummary:
+        rawText.slice(0, 1200) ||
+        'Belum ada percakapan Kina yang cukup untuk diringkas.',
+      teacherNotes:
+        latestTeacherNotes.slice(0, 800) ||
+        'Belum ada catatan tambahan dari percakapan Kina.',
+      projectCompletionStatus: completePattern.test(rawText)
+        ? 'complete'
+        : 'draft',
     };
   }
 }

@@ -72,4 +72,11 @@ export class KinaChatResponseDto {
 
   @ApiPropertyOptional({ type: [String] })
   suggestedFollowUpQuestions?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Progress diskusi PJBL kokurikuler: 7 data inti, tahap aktif, dan persentase kelengkapan.',
+    type: Object,
+  })
+  progress?: unknown;
 }

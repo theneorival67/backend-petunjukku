@@ -172,11 +172,12 @@ KINA chat:
 - meneruskan payload ke FastAPI:
 
 ```http
-POST /internal/ai/kina/chat
+POST /internal/ai/kina-chat
 POST /internal/ai/kina/session-title
 ```
 
-- menyimpan pesan user dan jawaban assistant ke `kina_chats`.
+- menyimpan pesan user dan jawaban assistant ke `kina_chats`,
+- `GET /ai/kina/chats/:projectId` mengembalikan `messages`, `suggestedFollowUpQuestions`, dan `progress` dari turn assistant terbaru. Suggestion/progress tidak diambil dari pesan sebelumnya.
 
 ## Generated RPM
 

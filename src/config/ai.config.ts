@@ -12,7 +12,7 @@ export const aiConfig = registerAs('ai', () => {
   return {
     enabled: process.env.AI_ENABLED === 'true',
     requestTimeoutMs: parseInt(
-      process.env.AI_REQUEST_TIMEOUT_MS ?? '60000',
+      process.env.AI_REQUEST_TIMEOUT_MS ?? '120000',
       10,
     ),
     generateRequestTimeoutMs: parseInt(

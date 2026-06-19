@@ -10,6 +10,7 @@ import { AiGatewayService } from '../rag/ai-gateway.service';
 import { UsersService } from '../users/users.service';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
 import { LintasDisiplinRecommendationResponseDto } from './dto/lintas-disiplin-recommendation.dto';
+import { RecommendStageOverrideDto } from './dto/recommend-stage.dto';
 import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
 
@@ -194,6 +195,64 @@ export class RppService {
     }
 
     return [];
+  }
+
+  private normalizeRecommendationStageOverrides(
+    overrides?: RecommendStageOverrideDto,
+  ) {
+    const rawStages: unknown[] = [];
+
+    if (Array.isArray(overrides?.previousStages)) {
+      rawStages.push(...overrides.previousStages);
+    }
+
+    if (overrides?.stage1 && typeof overrides.stage1 === 'object') {
+      rawStages.push({
+        stageNumber: 1,
+        stageName: 'Konteks Dasar Proyek',
+        contentJson: overrides.stage1,
+        isCompleted: true,
+      });
+    }
+
+    return rawStages
+      .map((raw) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          return null;
+        }
+
+        const stage = raw as Record<string, unknown>;
+        const stageNumber = Number(stage.stageNumber);
+        if (
+          !Number.isFinite(stageNumber) ||
+          stageNumber < 1 ||
+          stageNumber >= 2
+        ) {
+          return null;
+        }
+
+        const contentJson = this.toJsonObject(stage.contentJson ?? stage);
+        return {
+          stageNumber,
+          stageName:
+            typeof stage.stageName === 'string'
+              ? stage.stageName
+              : `Stage ${stageNumber}`,
+          contentJson,
+          isCompleted:
+            typeof stage.isCompleted === 'boolean' ? stage.isCompleted : true,
+        };
+      })
+      .filter(
+        (
+          stage,
+        ): stage is {
+          stageNumber: number;
+          stageName: string;
+          contentJson: Record<string, unknown>;
+          isCompleted: boolean;
+        } => Boolean(stage),
+      );
   }
 
   async create(user: AuthUser, dto: CreateRppProjectDto) {
@@ -441,6 +500,7 @@ export class RppService {
     user: AuthUser,
     projectId: string,
     stageNumber: number,
+    overrides?: RecommendStageOverrideDto,
   ): Promise<StageRecommendationResponseDto> {
     if (stageNumber !== 2) {
       throw new BadRequestException(
@@ -487,15 +547,44 @@ export class RppService {
       throw new NotFoundException('Project RPM tidak ditemukan.');
     }
 
-    const stage1 = project.stages.find((stage) => stage.stageNumber === 1);
+    const databasePreviousStages = project.stages
+      .filter((stage) => stage.stageNumber < 2)
+      .map((stage) => ({
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson: this.toJsonObject(stage.contentJson),
+        isCompleted: stage.isCompleted,
+      }));
+    const previousStagesByNumber = new Map<
+      number,
+      {
+        stageNumber: number;
+        stageName: string;
+        contentJson: Record<string, unknown>;
+        isCompleted: boolean;
+      }
+    >();
+    for (const stage of databasePreviousStages) {
+      previousStagesByNumber.set(stage.stageNumber, stage);
+    }
+    for (const stage of this.normalizeRecommendationStageOverrides(overrides)) {
+      previousStagesByNumber.set(stage.stageNumber, stage);
+    }
+    const previousStages = [...previousStagesByNumber.values()].sort(
+      (a, b) => a.stageNumber - b.stageNumber,
+    );
+    const stage1 = previousStages.find((stage) => stage.stageNumber === 1);
     const environmentScan =
       project.school?.environmentScans?.[0] ??
       project.teacherProfile.school?.environmentScans?.[0] ??
       null;
 
+    const selectedTheme = overrides?.selectedTheme;
     const recommendationType =
       project.rppType === RppType.pjbl_kokurikuler
-        ? 'project_recommendation'
+        ? selectedTheme
+          ? 'project_recommendation'
+          : 'project_theme_recommendation'
         : 'learning_objectives_flow';
     const targetStage = {
       stageNumber: 2,
@@ -505,6 +594,7 @@ export class RppService {
           : 'Fondasi Tujuan Pembelajaran',
       recommendationType,
       topic: project.topic || project.title,
+      ...(selectedTheme ? { selectedTheme } : {}),
     };
 
     const payload = {
@@ -562,32 +652,25 @@ export class RppService {
             gradeLevel: project.teacherClass.gradeLevel,
             academicYear: project.teacherClass.academicYear,
             studentCount: project.teacherClass.studentCount,
-            studentCharacteristics:
-              project.teacherClass.studentCharacteristics,
+            studentCharacteristics: project.teacherClass.studentCharacteristics,
             learningChallenges: this.toStringList(
               project.teacherClass.learningChallenges,
             ),
             dominantLearningStyle: project.teacherClass.dominantLearningStyle,
           }
         : null,
-      previousStages: project.stages
-        .filter((stage) => stage.stageNumber < 2)
-        .map((stage) => ({
-          stageNumber: stage.stageNumber,
-          stageName: stage.stageName,
-          contentJson: this.toJsonObject(stage.contentJson),
-          isCompleted: stage.isCompleted,
-        })),
+      previousStages,
       targetStage,
       options: {
         topK: 5,
         language: 'id',
         outputFormat: 'json',
+        ...(selectedTheme ? { selectedTheme } : {}),
       },
       stage1: stage1
         ? {
             stageName: stage1.stageName,
-            contentJson: this.toJsonObject(stage1.contentJson),
+            contentJson: stage1.contentJson,
             isCompleted: stage1.isCompleted,
           }
         : null,
@@ -640,13 +723,72 @@ export class RppService {
       );
     }
 
-    return {
-      subjects: this.fallbackLintasDisiplinSubjects(
-        project.subject,
-        project.topic,
-        profilLulusan,
-      ),
-      source: 'be_fallback',
+    const payload = {
+      project: {
+        id: project.id,
+        title: project.title,
+        rppType: project.rppType,
+        subject: project.subject,
+        phase: project.phase,
+        gradeLevel: project.gradeLevel,
+        topic: project.topic,
+      },
+      teacherProfile: {
+        fullName: project.teacherProfile.fullName,
+        position: project.teacherProfile.position,
+        educationLevel: project.teacherProfile.educationLevel,
+      },
+      school: project.school
+        ? {
+            name: project.school.name,
+            province: project.school.province,
+            city: project.school.city,
+            schoolEnvironment: project.school.schoolEnvironment,
+            localContext: project.school.localContext,
+          }
+        : null,
+      teacherClass: project.teacherClass
+        ? {
+            className: project.teacherClass.className,
+            gradeLevel: project.teacherClass.gradeLevel,
+            studentCount: project.teacherClass.studentCount,
+            studentCharacteristics: project.teacherClass.studentCharacteristics,
+          }
+        : null,
+      previousStages: project.stages
+        .filter((stage) => stage.stageNumber < 2)
+        .map((stage) => ({
+          stageNumber: stage.stageNumber,
+          stageName: stage.stageName,
+          contentJson: this.toJsonObject(stage.contentJson),
+          isCompleted: stage.isCompleted,
+        })),
+      profilLulusan,
+      options: {
+        language: 'id',
+        outputFormat: 'json',
+      },
     };
+
+    try {
+      return await this.aiGateway.postInternal<LintasDisiplinRecommendationResponseDto>(
+        'internal/ai/recommend-lintas-disiplin',
+        payload,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Rekomendasi lintas disiplin AI gagal, pakai fallback lokal: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+      return {
+        subjects: this.fallbackLintasDisiplinSubjects(
+          project.subject,
+          project.topic,
+          profilLulusan,
+        ),
+        source: 'be_fallback',
+      };
+    }
   }
 }

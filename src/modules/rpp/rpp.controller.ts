@@ -14,6 +14,7 @@ import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { CreateRppProjectDto } from './dto/create-rpp-project.dto';
 import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
 import { LintasDisiplinRecommendationResponseDto } from './dto/lintas-disiplin-recommendation.dto';
+import { RecommendStageOverrideDto } from './dto/recommend-stage.dto';
 import { StageRecommendationResponseDto } from './dto/stage-recommendation.dto';
 import { RppService } from './rpp.service';
 
@@ -54,8 +55,14 @@ export class RppController {
     @CurrentUser() user: AuthUser,
     @Param('projectId') projectId: string,
     @Param('stageNumber') stageNumber: string,
+    @Body() body: RecommendStageOverrideDto,
   ): Promise<StageRecommendationResponseDto> {
-    return this.rppService.recommendStage(user, projectId, Number(stageNumber));
+    return this.rppService.recommendStage(
+      user,
+      projectId,
+      Number(stageNumber),
+      body,
+    );
   }
 
   @ApiOperation({

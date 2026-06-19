@@ -35,7 +35,7 @@ export class NearbyEnvironmentQueryDto {
 
   @ApiPropertyOptional({
     description: 'Radius pencarian dalam meter',
-    default: 2000,
+    default: 5000,
   })
   @IsOptional()
   @Type(() => Number)

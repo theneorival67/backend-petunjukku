@@ -12,11 +12,29 @@ export type CuratedNearbyPlace = {
   name: string;
   distanceMeters: number;
   distanceLabel: string;
+  categoryId: string;
   category: string;
   colorKey: string;
   relevanceNote: string;
   relevanceScore: number;
 };
+
+export type NearbyPlaceCandidate = RawNearbyPlace & {
+  distanceMeters: number;
+  distanceLabel: string;
+};
+
+export type EnvironmentCategoryGroup = {
+  id: string;
+  label: string;
+  description: string;
+  colorKey: string;
+  placeCount: number;
+  learningUses: string[];
+  places: CuratedNearbyPlace[];
+};
+
+export const ENVIRONMENT_CANDIDATE_LIMIT = 500;
 
 const EXCLUDED_TYPES = new Set([
   'parking',
@@ -25,10 +43,69 @@ const EXCLUDED_TYPES = new Set([
   'car_wash',
   'atm',
   'bus_stop',
+  'lodging',
+  'hotel',
+  'motel',
+  'night_club',
+  'bar',
+  'car_repair',
+  'car_dealer',
+  'route',
+  'street_address',
+  'intersection',
+  'neighborhood',
+  'sublocality',
+  'political',
+]);
+
+const ROUTE_NAME_PATTERN =
+  /^(gg\.?|gang|jl\.?|jalan|jln\.?|lorong|kp\.?|kampung|blok)\b/i;
+const PRIVATE_OR_NOISY_NAME_PATTERN =
+  /\b(rumah|kontrakan|kost|kos|basecamp|secretariat|sekretariat|mberr|test|dummy|mansion|residence|residences|apartment|apartemen|tower|cluster|villa)\b/i;
+const TRUSTED_PLACE_TYPES = new Set([
+  'restaurant',
+  'cafe',
+  'bakery',
+  'meal_takeaway',
+  'supermarket',
+  'grocery_store',
+  'convenience_store',
+  'store',
+  'shopping_mall',
+  'market',
+  'park',
+  'playground',
+  'garden',
+  'museum',
+  'library',
+  'tourist_attraction',
+  'historical_landmark',
+  'cultural_landmark',
+  'school',
+  'primary_school',
+  'secondary_school',
+  'university',
+  'hospital',
+  'pharmacy',
+  'doctor',
+  'dentist',
+  'clinic',
+  'mosque',
+  'church',
+  'hindu_temple',
+  'place_of_worship',
+  'local_government_office',
+  'post_office',
+  'police',
+  'bank',
+  'gym',
+  'sports_complex',
+  'stadium',
 ]);
 
 type TypeRule = {
   test: (types: string[], primary?: string) => boolean;
+  categoryId: string;
   category: string;
   colorKey: string;
   score: number;
@@ -38,41 +115,63 @@ type TypeRule = {
 const TYPE_RULES: TypeRule[] = [
   {
     test: (t) => t.some((x) => x.includes('park') || x === 'playground'),
-    category: 'Ruang terbuka hijau',
+    categoryId: 'ruang-terbuka',
+    category: 'Ruang terbuka & lingkungan',
     colorKey: 'emerald',
     score: 92,
-    note: 'Cocok untuk observasi lingkungan dan proyek lapangan.',
-  },
-  {
-    test: (t) =>
-      t.some((x) => ['school', 'library', 'university', 'museum'].includes(x)),
-    category: 'Pendidikan & budaya',
-    colorKey: 'blue',
-    score: 88,
-    note: 'Mendukung kolaborasi atau kunjungan belajar.',
+    note: 'Cocok untuk observasi lingkungan, kebersihan, dan aktivitas lapangan.',
   },
   {
     test: (t) =>
       t.some((x) =>
-        ['market', 'shopping_mall', 'store', 'supermarket'].includes(x),
+        [
+          'museum',
+          'tourist_attraction',
+          'historical_landmark',
+          'cultural_landmark',
+        ].includes(x),
       ),
-    category: 'Ekonomi & UMKM',
-    colorKey: 'amber',
-    score: 86,
-    note: 'Relevan untuk studi UMKM, matematika, atau IPS lokal.',
+    categoryId: 'budaya-sejarah',
+    category: 'Budaya & sejarah',
+    colorKey: 'blue',
+    score: 91,
+    note: 'Relevan untuk cerita lokal, sejarah, budaya, dan identitas tempat.',
   },
   {
-    test: (t) => t.some((x) => x.includes('restaurant') || x.includes('cafe')),
-    category: 'Pusat makan & komunitas',
-    colorKey: 'violet',
-    score: 78,
-    note: 'Bisa dipakai untuk survei layanan atau budaya lokal.',
+    test: (t) => t.some((x) => ['school', 'library', 'university'].includes(x)),
+    categoryId: 'pendidikan-literasi',
+    category: 'Pendidikan & literasi',
+    colorKey: 'blue',
+    score: 84,
+    note: 'Mendukung kolaborasi, literasi, dan sumber belajar sekitar sekolah.',
+  },
+  {
+    test: (t) =>
+      t.some((x) =>
+        [
+          'market',
+          'shopping_mall',
+          'store',
+          'supermarket',
+          'convenience_store',
+          'restaurant',
+          'cafe',
+          'meal_takeaway',
+          'bakery',
+        ].includes(x),
+      ),
+    categoryId: 'umkm-ekonomi',
+    category: 'UMKM & ekonomi lokal',
+    colorKey: 'amber',
+    score: 86,
+    note: 'Relevan untuk studi jual beli, layanan, kebutuhan warga, dan ekonomi lokal.',
   },
   {
     test: (t) =>
       t.some((x) =>
         ['hospital', 'health', 'pharmacy', 'doctor'].some((k) => x.includes(k)),
       ),
+    categoryId: 'kesehatan',
     category: 'Kesehatan',
     colorKey: 'rose',
     score: 75,
@@ -86,20 +185,73 @@ const TYPE_RULES: TypeRule[] = [
           x.includes('mosque') ||
           x.includes('place_of_worship'),
       ),
-    category: 'Keagamaan & sosial',
+    categoryId: 'sosial-keagamaan',
+    category: 'Sosial & keagamaan',
     colorKey: 'slate',
     score: 72,
     note: 'Memperkaya konteks nilai dan kebinekaan.',
   },
   {
     test: (t) =>
-      t.some((x) => x.includes('tourist') || x.includes('amusement')),
-    category: 'Rekreasi & wisata',
+      t.some((x) =>
+        [
+          'local_government_office',
+          'police',
+          'post_office',
+          'bank',
+          'transit_station',
+          'train_station',
+        ].includes(x),
+      ),
+    categoryId: 'layanan-publik',
+    category: 'Layanan publik & akses',
     colorKey: 'cyan',
-    score: 70,
-    note: 'Potensial untuk eksplorasi geografi atau ekonomi kreatif.',
+    score: 68,
+    note: 'Bisa dipakai untuk membahas layanan warga, akses, dan keselamatan.',
   },
 ];
+
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  'ekonomi-lokal':
+    'Tempat jual beli, layanan, dan aktivitas ekonomi lokal di sekitar sekolah.',
+  'umkm-ekonomi':
+    'Tempat jual beli, layanan, dan aktivitas ekonomi lokal di sekitar sekolah.',
+  'budaya-sejarah':
+    'Tempat atau praktik yang bisa memantik cerita budaya, sejarah, dan identitas lokal.',
+  'ruang-terbuka':
+    'Area terbuka untuk observasi lingkungan, kebersihan, dan aktivitas lapangan aman.',
+  'pendidikan-literasi':
+    'Sumber belajar, literasi, dan kolaborasi pendidikan di sekitar sekolah.',
+  kesehatan: 'Fasilitas atau konteks yang berkaitan dengan kesehatan warga.',
+  'sosial-keagamaan':
+    'Ruang sosial, nilai, kebinekaan, dan kehidupan warga sekitar sekolah.',
+  'tempat-ibadah':
+    'Ruang ibadah dan nilai sosial yang dapat diamati dengan etika dan izin yang tepat.',
+  'layanan-publik':
+    'Layanan warga, akses, dan titik yang perlu dipertimbangkan untuk keamanan.',
+  umum: 'Konteks sekitar sekolah yang masih bisa dipakai untuk observasi umum.',
+};
+
+const CATEGORY_LEARNING_USES: Record<string, string[]> = {
+  'ekonomi-lokal': [
+    'Survei kebutuhan',
+    'Data harga/jual beli',
+    'Cerita usaha lokal',
+  ],
+  'umkm-ekonomi': [
+    'Survei kebutuhan',
+    'Data harga/jual beli',
+    'Cerita usaha lokal',
+  ],
+  'budaya-sejarah': ['Cerita lokal', 'Linimasa perubahan', 'Karya budaya'],
+  'ruang-terbuka': ['Observasi lingkungan', 'Kebersihan', 'Sketsa lokasi'],
+  'pendidikan-literasi': ['Literasi sumber', 'Kolaborasi belajar', 'Wawancara'],
+  kesehatan: ['Kebiasaan sehat', 'Akses layanan', 'Kampanye kesehatan'],
+  'sosial-keagamaan': ['Nilai kebinekaan', 'Etika sosial', 'Cerita komunitas'],
+  'tempat-ibadah': ['Etika observasi', 'Nilai sosial', 'Cerita komunitas'],
+  'layanan-publik': ['Akses aman', 'Layanan warga', 'Pemetaan rute'],
+  umum: ['Observasi umum', 'Catatan lapangan', 'Diskusi konteks'],
+};
 
 function haversineMeters(
   lat1: number,
@@ -125,6 +277,65 @@ export function formatDistanceLabel(meters: number): string {
   return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
 }
 
+export function buildNearbyPlaceCandidates(
+  centerLat: number,
+  centerLng: number,
+  raw: RawNearbyPlace[],
+  limit = ENVIRONMENT_CANDIDATE_LIMIT,
+): NearbyPlaceCandidate[] {
+  return raw
+    .map((place) => {
+      const distanceMeters = haversineMeters(
+        centerLat,
+        centerLng,
+        place.latitude,
+        place.longitude,
+      );
+
+      return {
+        ...place,
+        distanceMeters,
+        distanceLabel: formatDistanceLabel(distanceMeters),
+      };
+    })
+    .filter(
+      (place) =>
+        place.distanceMeters >= 30 && isSensibleNearbyPlaceCandidate(place),
+    )
+    .sort((a, b) => a.distanceMeters - b.distanceMeters)
+    .slice(0, limit);
+}
+
+export function isSensibleNearbyPlaceCandidate(place: RawNearbyPlace): boolean {
+  const name = place.name.replace(/\s+/g, ' ').trim();
+  const types = [place.primaryType ?? '', ...(place.types ?? [])]
+    .map((type) => type.trim().toLowerCase())
+    .filter(Boolean);
+  const hasTrustedType = types.some((type) => TRUSTED_PLACE_TYPES.has(type));
+
+  if (name.length < 3 || name.length > 90 || !/[a-zA-ZÀ-ÿ]/.test(name)) {
+    return false;
+  }
+
+  if (types.some((type) => EXCLUDED_TYPES.has(type))) {
+    return false;
+  }
+
+  if (PRIVATE_OR_NOISY_NAME_PATTERN.test(name)) {
+    return false;
+  }
+
+  if (ROUTE_NAME_PATTERN.test(name) && !hasTrustedType) {
+    return false;
+  }
+
+  if (!hasTrustedType && /^[\w\s.'-]+$/i.test(name) && name.split(/\s+/).length > 5) {
+    return false;
+  }
+
+  return true;
+}
+
 function classifyPlace(
   types: string[],
   primaryType?: string,
@@ -137,6 +348,7 @@ function classifyPlace(
   for (const rule of TYPE_RULES) {
     if (rule.test(merged, primaryType)) {
       return {
+        categoryId: rule.categoryId,
         category: rule.category,
         colorKey: rule.colorKey,
         relevanceScore: rule.score,
@@ -146,6 +358,7 @@ function classifyPlace(
   }
 
   return {
+    categoryId: 'umum',
     category: 'Lingkungan sekitar',
     colorKey: 'gray',
     relevanceScore: 55,
@@ -162,7 +375,7 @@ export function curateNearbyPlaces(
   const scored = raw
     .map((place) => {
       const types = place.types ?? [];
-      if (types.some((t) => EXCLUDED_TYPES.has(t))) {
+      if (!isSensibleNearbyPlaceCandidate(place)) {
         return null;
       }
 
@@ -195,10 +408,12 @@ export function curateNearbyPlaces(
       return a.distanceMeters - b.distanceMeters;
     });
 
+  const actionable = scored.filter((item) => item.categoryId !== 'umum');
+  const candidatePool = actionable.length > 0 ? actionable : scored;
   const picked: CuratedNearbyPlace[] = [];
   const usedCategories = new Set<string>();
 
-  for (const item of scored) {
+  for (const item of candidatePool) {
     if (picked.length >= limit) {
       break;
     }
@@ -210,7 +425,7 @@ export function curateNearbyPlaces(
   }
 
   if (picked.length < limit) {
-    for (const item of scored) {
+    for (const item of candidatePool) {
       if (picked.length >= limit) {
         break;
       }
@@ -221,6 +436,48 @@ export function curateNearbyPlaces(
   }
 
   return picked.sort((a, b) => a.distanceMeters - b.distanceMeters);
+}
+
+export function buildEnvironmentCategoryGroups(
+  places: CuratedNearbyPlace[],
+): EnvironmentCategoryGroup[] {
+  const grouped = new Map<string, CuratedNearbyPlace[]>();
+
+  for (const place of places) {
+    const key = place.categoryId || 'umum';
+    grouped.set(key, [...(grouped.get(key) ?? []), place]);
+  }
+
+  return [...grouped.entries()]
+    .map(([id, groupPlaces]) => {
+      const sortedPlaces = [...groupPlaces].sort((a, b) => {
+        if (b.relevanceScore !== a.relevanceScore) {
+          return b.relevanceScore - a.relevanceScore;
+        }
+        return a.distanceMeters - b.distanceMeters;
+      });
+      const topPlace = sortedPlaces[0];
+      return {
+        id,
+        label: topPlace.category,
+        description:
+          CATEGORY_DESCRIPTIONS[id] ??
+          'Konteks sekitar sekolah yang dapat dipakai untuk proyek berbasis observasi.',
+        colorKey: topPlace.colorKey,
+        placeCount: sortedPlaces.length,
+        learningUses: CATEGORY_LEARNING_USES[id] ?? CATEGORY_LEARNING_USES.umum,
+        places: sortedPlaces.slice(0, 3),
+      };
+    })
+    .filter((group) => group.placeCount >= 2)
+    .sort((a, b) => {
+      const topA = a.places[0]?.relevanceScore ?? 0;
+      const topB = b.places[0]?.relevanceScore ?? 0;
+      if (topB !== topA) {
+        return topB - topA;
+      }
+      return b.placeCount - a.placeCount;
+    });
 }
 
 export function buildEnvironmentSummary(
