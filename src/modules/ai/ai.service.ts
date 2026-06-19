@@ -626,14 +626,12 @@ export class AiService {
     stageName: string;
     contentJson: unknown;
     isCompleted?: boolean;
-  }):
-    | {
-        stageNumber: number;
-        stageName: string;
-        contentJson: Record<string, unknown>;
-        isCompleted?: boolean;
-      }
-    | null {
+  }): {
+    stageNumber: number;
+    stageName: string;
+    contentJson: Record<string, unknown>;
+    isCompleted?: boolean;
+  } | null {
     const contentJson = this.toJsonObject(stage.contentJson);
 
     if (stage.stageNumber === 1 || stage.stageNumber === 2) {

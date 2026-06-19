@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { RppStatus, RppType } from '@prisma/client';
@@ -16,6 +17,8 @@ import { UpdateRppProjectDto } from './dto/update-rpp-project.dto';
 
 @Injectable()
 export class RppService {
+  private readonly logger = new Logger(RppService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,

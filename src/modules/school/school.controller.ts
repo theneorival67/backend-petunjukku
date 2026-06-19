@@ -40,10 +40,7 @@ export class SchoolController {
 
   @ApiOperation({ summary: 'Update data sekolah berdasarkan ID' })
   @Put(':id')
-  update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateSchoolDto,
-  ) {
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSchoolDto) {
     return this.schoolService.update(id, dto);
   }
 }
