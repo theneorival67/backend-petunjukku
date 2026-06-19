@@ -41,10 +41,13 @@ type KinaChatProgress = {
   totalCount?: number;
   percentage?: number;
   isComplete?: boolean;
+  missingSlots?: string[];
   stages?: {
     key: string;
     label: string;
     complete: boolean;
+    foundSlots?: string[];
+    missingSlots?: string[];
   }[];
 };
 
@@ -206,18 +209,6 @@ export class AiService {
       };
     }
 
-    const existingHistory = projectId
-      ? (
-          await this.prisma.kinaChat.findMany({
-            where: {
-              userId: user.id,
-              rppProjectId: projectId,
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 40,
-          })
-        ).reverse()
-      : [];
     if (projectId) {
       await this.assertProjectOwner(user, projectId);
     }
@@ -234,10 +225,14 @@ export class AiService {
     }
 
     const fastApiPayload = projectId
-      ? await this.buildKinaFastApiPayload(user, projectId, existingHistory)
+      ? await this.buildKinaFastApiPayload(
+          user,
+          projectId,
+          await this.getLatestKinaHistory(user.id, projectId),
+        )
       : null;
     if (!this.isEnabled()) {
-      if (requireAi) {
+      if (projectId || requireAi) {
         throw new BadRequestException(
           'Layanan AI belum aktif. KINA tidak boleh memakai fallback untuk request ini.',
         );
@@ -265,6 +260,15 @@ export class AiService {
     }
 
     try {
+      const chatHistory = Array.isArray(fastApiPayload.chatHistory)
+        ? fastApiPayload.chatHistory
+        : [];
+      this.logger.debug(
+        `KINA FastAPI request: message="${this.toLogSnippet(
+          latestUserContent,
+        )}", chatHistory=${chatHistory.length}`,
+      );
+
       const response = await this.aiGateway.postInternal<KinaFastApiResponse>(
         'internal/ai/kina-chat',
         {
@@ -274,17 +278,25 @@ export class AiService {
         },
       );
 
-      if (requireAi && !response.reply?.trim()) {
+      if (!response.reply?.trim()) {
         throw new Error('KINA AI mengembalikan respons kosong.');
       }
 
+      const suggestedFollowUpQuestions = this.normalizeSuggestionList(
+        response.suggestedFollowUpQuestions,
+      );
+      this.logger.debug(
+        `KINA FastAPI response: progress=${response.progress?.percentage ?? 'n/a'}, suggestedFollowUpQuestions=${JSON.stringify(
+          suggestedFollowUpQuestions,
+        )}`,
+      );
+
       const result = {
-        reply:
-          response.reply?.trim() || this.fallbackKinaReply(latestUserContent),
+        reply: response.reply.trim(),
         model: response.model ?? 'fastapi',
         source: 'ai_service' as const,
         usedReferences: response.usedReferences ?? [],
-        suggestedFollowUpQuestions: response.suggestedFollowUpQuestions ?? [],
+        suggestedFollowUpQuestions,
         progress: response.progress,
       };
 
@@ -304,18 +316,9 @@ export class AiService {
       this.logger.warn(
         `KINA chat gagal: ${error instanceof Error ? error.message : error}`,
       );
-      if (requireAi) {
-        throw new BadRequestException(
-          'KINA AI belum berhasil merespons. Periksa konfigurasi AI dan coba lagi.',
-        );
-      }
-      const fallback = {
-        reply: this.fallbackKinaReply(latestUserContent),
-        model: 'fallback',
-        source: 'fallback' as const,
-      };
-      await this.saveAssistantReply(user.id, projectId, fallback);
-      return fallback;
+      throw new BadRequestException(
+        'KINA AI belum berhasil merespons. Periksa konfigurasi AI dan coba lagi.',
+      );
     }
   }
 
@@ -329,13 +332,22 @@ export class AiService {
       throw new NotFoundException('Project RPP tidak ditemukan.');
     }
 
-    return this.prisma.kinaChat.findMany({
+    const messages = await this.prisma.kinaChat.findMany({
       where: {
         userId: user.id,
         rppProjectId: projectId,
       },
       orderBy: { createdAt: 'asc' },
     });
+
+    const latestAssistantState = this.getLatestAssistantTurnState(messages);
+
+    return {
+      messages,
+      suggestedFollowUpQuestions:
+        latestAssistantState.suggestedFollowUpQuestions,
+      progress: latestAssistantState.progress,
+    };
   }
 
   async clearKinaHistory(user: AuthUser, projectId: string) {
@@ -420,6 +432,61 @@ export class AiService {
         },
       },
     });
+  }
+
+  private async getLatestKinaHistory(userId: string, projectId: string) {
+    return (
+      await this.prisma.kinaChat.findMany({
+        where: {
+          userId,
+          rppProjectId: projectId,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+      })
+    )
+      .reverse()
+      .map((chat) => ({
+        role: chat.role,
+        content: chat.content,
+      }));
+  }
+
+  private normalizeSuggestionList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((item): item is string => typeof item === 'string');
+  }
+
+  private getLatestAssistantTurnState(
+    messages: Array<{ role: string; metadata: unknown }>,
+  ): {
+    suggestedFollowUpQuestions: string[];
+    progress?: KinaChatProgress;
+  } {
+    const latestMessage = messages.at(-1);
+
+    if (latestMessage?.role !== 'assistant') {
+      return { suggestedFollowUpQuestions: [] };
+    }
+
+    const metadata = this.toJsonObject(latestMessage.metadata);
+
+    return {
+      suggestedFollowUpQuestions: this.normalizeSuggestionList(
+        metadata.suggestedFollowUpQuestions,
+      ),
+      progress:
+        metadata.progress && typeof metadata.progress === 'object'
+          ? (metadata.progress as KinaChatProgress)
+          : undefined,
+    };
+  }
+
+  private toLogSnippet(value: string): string {
+    return value.replace(/\s+/g, ' ').trim().slice(0, 160);
   }
 
   private toJsonObject(value: unknown): Record<string, unknown> {
@@ -522,16 +589,92 @@ export class AiService {
             dominantLearningStyle: project.teacherClass.dominantLearningStyle,
           }
         : {},
-      stages: project.stages.map((stage) => ({
-        stageNumber: stage.stageNumber,
-        stageName: stage.stageName,
-        contentJson: this.toJsonObject(stage.contentJson),
-      })),
+      stages: project.stages
+        .map((stage) => this.toKinaStagePayload(stage))
+        .filter((stage): stage is NonNullable<typeof stage> => Boolean(stage)),
       chatHistory: history.map((chat) => ({
         role: chat.role,
         message: chat.content,
       })),
     };
+  }
+
+  private toKinaStagePayload(stage: {
+    stageNumber: number;
+    stageName: string;
+    contentJson: unknown;
+    isCompleted?: boolean;
+  }):
+    | {
+        stageNumber: number;
+        stageName: string;
+        contentJson: Record<string, unknown>;
+        isCompleted?: boolean;
+      }
+    | null {
+    const contentJson = this.toJsonObject(stage.contentJson);
+
+    if (stage.stageNumber === 1 || stage.stageNumber === 2) {
+      return {
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson,
+        isCompleted: stage.isCompleted,
+      };
+    }
+
+    if (stage.stageNumber === 3) {
+      const summary = this.extractValidStage3Summary(contentJson);
+
+      if (!summary) {
+        return null;
+      }
+
+      return {
+        stageNumber: stage.stageNumber,
+        stageName: stage.stageName,
+        contentJson: summary,
+        isCompleted: stage.isCompleted,
+      };
+    }
+
+    return null;
+  }
+
+  private extractValidStage3Summary(
+    contentJson: Record<string, unknown>,
+  ): Record<string, unknown> | null {
+    const summaryKeys = [
+      'discussionSummary',
+      'learningStrategy',
+      'pedagogicalApproach',
+      'facilityAndTechnologyUse',
+      'digitalPlatform',
+      'partnership',
+      'finalStudentProduct',
+      'activityFlowDecision',
+      'differentiationPlan',
+      'teacherNotes',
+      'stage3CompletionStatus',
+    ];
+    const summary = Object.fromEntries(
+      summaryKeys
+        .filter((key) => contentJson[key] !== undefined)
+        .map((key) => [key, contentJson[key]]),
+    );
+    const hasValidSummary = Object.values(summary).some((value) => {
+      if (typeof value === 'string') {
+        return value.trim().length > 0;
+      }
+
+      return (
+        value !== null &&
+        typeof value === 'object' &&
+        Object.keys(value).length > 0
+      );
+    });
+
+    return hasValidSummary ? summary : null;
   }
 
   private async buildKinaProfileContext(
