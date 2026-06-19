@@ -75,8 +75,15 @@ export class KinaChatResponseDto {
 
   @ApiPropertyOptional({
     description:
-      'Progress diskusi PJBL kokurikuler: 7 data inti, tahap aktif, dan persentase kelengkapan.',
+      'Progress diskusi PJBL kokurikuler: 9 data inti, tahap aktif, dan persentase kelengkapan.',
     type: Object,
   })
   progress?: unknown;
+
+  @ApiPropertyOptional({
+    description:
+      'Memory terstruktur Stage 3 berisi rangkuman dan status 9 data diskusi.',
+    type: Object,
+  })
+  stage3Memory?: unknown;
 }

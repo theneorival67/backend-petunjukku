@@ -589,6 +589,34 @@ export class RppService {
           ? 'project_recommendation'
           : 'project_theme_recommendation'
         : 'learning_objectives_flow';
+
+    const stage2 = project.stages.find((stage) => stage.stageNumber === 2);
+    const contentJson = (stage2?.contentJson as any) || {};
+    const aiCache = contentJson._aiCache || {};
+
+    if (recommendationType === 'project_theme_recommendation' && aiCache.project_theme_recommendation) {
+      return {
+        rppType: project.rppType,
+        recommendationType,
+        targetStageNumber: 2,
+        ragReferences: [],
+        recommendations: aiCache.project_theme_recommendation,
+      };
+    }
+
+    if (recommendationType === 'project_recommendation' && selectedTheme) {
+      const themeId = (typeof selectedTheme === 'string' ? selectedTheme : (selectedTheme as any).id) as string;
+      if (aiCache.project_recommendation && aiCache.project_recommendation[themeId]) {
+        return {
+          rppType: project.rppType,
+          recommendationType,
+          targetStageNumber: 2,
+          ragReferences: [],
+          recommendations: aiCache.project_recommendation[themeId],
+        };
+      }
+    }
+
     const targetStage = {
       stageNumber: 2,
       stageName:
@@ -689,10 +717,45 @@ export class RppService {
         : null,
     };
 
-    return this.aiGateway.postInternal<StageRecommendationResponseDto>(
+    const response = await this.aiGateway.postInternal<StageRecommendationResponseDto>(
       'internal/ai/recommend-stage',
       payload,
     );
+
+    if (project.rppType === RppType.pjbl_kokurikuler) {
+      const updatedAiCache = { ...aiCache };
+      if (recommendationType === 'project_theme_recommendation') {
+        updatedAiCache.project_theme_recommendation = response.recommendations;
+      } else if (recommendationType === 'project_recommendation' && selectedTheme) {
+        const themeId = (typeof selectedTheme === 'string' ? selectedTheme : (selectedTheme as any).id) as string;
+        updatedAiCache.project_recommendation = {
+          ...(updatedAiCache.project_recommendation || {}),
+          [themeId]: response.recommendations,
+        };
+      }
+
+      const updatedContentJson = { ...contentJson, _aiCache: updatedAiCache };
+
+      await this.prisma.rppStage.upsert({
+        where: {
+          rppProjectId_stageNumber: {
+            rppProjectId: projectId,
+            stageNumber: 2,
+          },
+        },
+        create: {
+          rppProjectId: projectId,
+          stageNumber: 2,
+          stageName: 'Rekomendasi Proyek',
+          contentJson: updatedContentJson,
+        },
+        update: {
+          contentJson: updatedContentJson,
+        },
+      });
+    }
+
+    return response;
   }
 
   async recommendLintasDisiplin(

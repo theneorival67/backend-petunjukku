@@ -89,6 +89,20 @@ export class StageService {
   async save(user: AuthUser, projectId: string, dto: SaveRppStageDto) {
     const project = await this.getRppProjectOrThrow(user, projectId);
 
+    const existingStage = await this.prisma.rppStage.findUnique({
+      where: {
+        rppProjectId_stageNumber: {
+          rppProjectId: projectId,
+          stageNumber: dto.stageNumber,
+        },
+      },
+    });
+
+    const contentChanged =
+      !existingStage ||
+      JSON.stringify(existingStage.contentJson) !==
+        JSON.stringify(dto.contentJson);
+
     const stage = await this.prisma.rppStage.upsert({
       where: {
         rppProjectId_stageNumber: {
@@ -109,6 +123,24 @@ export class StageService {
         isCompleted: dto.isCompleted ?? false,
       },
     });
+
+    if (dto.stageNumber === 1 && contentChanged) {
+      const stage2 = await this.prisma.rppStage.findUnique({
+        where: {
+          rppProjectId_stageNumber: { rppProjectId: projectId, stageNumber: 2 },
+        },
+      });
+      if (stage2 && stage2.contentJson) {
+        const contentJson = stage2.contentJson as any;
+        if (contentJson._aiCache) {
+          delete contentJson._aiCache;
+          await this.prisma.rppStage.update({
+            where: { id: stage2.id },
+            data: { contentJson },
+          });
+        }
+      }
+    }
 
     await this.prisma.rppProject.update({
       where: {
@@ -150,6 +182,11 @@ export class StageService {
       throw new NotFoundException('Stage RPM tidak ditemukan.');
     }
 
+    const contentChanged =
+      dto.contentJson !== undefined &&
+      JSON.stringify(existingStage.contentJson) !==
+        JSON.stringify(dto.contentJson);
+
     const stage = await this.prisma.rppStage.update({
       where: {
         rppProjectId_stageNumber: {
@@ -169,6 +206,24 @@ export class StageService {
           : {}),
       },
     });
+
+    if (stageNumber === 1 && contentChanged) {
+      const stage2 = await this.prisma.rppStage.findUnique({
+        where: {
+          rppProjectId_stageNumber: { rppProjectId: projectId, stageNumber: 2 },
+        },
+      });
+      if (stage2 && stage2.contentJson) {
+        const contentJson = stage2.contentJson as any;
+        if (contentJson._aiCache) {
+          delete contentJson._aiCache;
+          await this.prisma.rppStage.update({
+            where: { id: stage2.id },
+            data: { contentJson },
+          });
+        }
+      }
+    }
 
     await this.prisma.rppProject.update({
       where: {

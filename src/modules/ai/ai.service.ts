@@ -46,6 +46,7 @@ type KinaChatProgress = {
     key: string;
     label: string;
     complete: boolean;
+    summary?: string;
     foundSlots?: string[];
     missingSlots?: string[];
   }[];
@@ -57,6 +58,7 @@ type KinaFastApiResponse = {
   usedReferences?: unknown[];
   suggestedFollowUpQuestions?: string[];
   progress?: KinaChatProgress;
+  stage3Memory?: Record<string, unknown>;
 };
 
 const ALLOWED_COLOR_KEYS = new Set([
@@ -177,6 +179,7 @@ export class AiService {
     usedReferences?: unknown[];
     suggestedFollowUpQuestions?: string[];
     progress?: KinaChatProgress;
+    stage3Memory?: Record<string, unknown>;
   }> {
     const projectId = Array.isArray(dto) ? undefined : dto.projectId;
     const requireAi = !Array.isArray(dto) && Boolean(dto.requireAi);
@@ -298,6 +301,7 @@ export class AiService {
         usedReferences: response.usedReferences ?? [],
         suggestedFollowUpQuestions,
         progress: response.progress,
+        stage3Memory: this.toJsonObject(response.stage3Memory),
       };
 
       await this.saveAssistantReply(user.id, projectId, {
@@ -308,6 +312,7 @@ export class AiService {
           usedReferences: result.usedReferences,
           suggestedFollowUpQuestions: result.suggestedFollowUpQuestions,
           progress: result.progress,
+          stage3Memory: result.stage3Memory,
         },
       });
 
@@ -347,6 +352,7 @@ export class AiService {
       suggestedFollowUpQuestions:
         latestAssistantState.suggestedFollowUpQuestions,
       progress: latestAssistantState.progress,
+      stage3Memory: latestAssistantState.stage3Memory,
     };
   }
 
@@ -449,6 +455,7 @@ export class AiService {
       .map((chat) => ({
         role: chat.role,
         content: chat.content,
+        metadata: chat.metadata,
       }));
   }
 
@@ -465,10 +472,13 @@ export class AiService {
   ): {
     suggestedFollowUpQuestions: string[];
     progress?: KinaChatProgress;
+    stage3Memory?: Record<string, unknown>;
   } {
-    const latestMessage = messages.at(-1);
+    const latestMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant');
 
-    if (latestMessage?.role !== 'assistant') {
+    if (!latestMessage) {
       return { suggestedFollowUpQuestions: [] };
     }
 
@@ -482,6 +492,7 @@ export class AiService {
         metadata.progress && typeof metadata.progress === 'object'
           ? (metadata.progress as KinaChatProgress)
           : undefined,
+      stage3Memory: this.toJsonObject(metadata.stage3Memory),
     };
   }
 
@@ -514,7 +525,7 @@ export class AiService {
   private async buildKinaFastApiPayload(
     user: AuthUser,
     projectId: string,
-    history: Array<{ role: string; content: string }>,
+    history: Array<{ role: string; content: string; metadata?: unknown }>,
   ): Promise<Record<string, unknown>> {
     const project = await this.prisma.rppProject.findFirst({
       where: { id: projectId, userId: user.id },
@@ -555,6 +566,13 @@ export class AiService {
       content
         .replace(/\b(?:Ibu|Bapak|Bu|Pak)\s+Vica\b/g, teacherSalutationName)
         .replace(/\bVica\b/g, teacherFirstName);
+
+    const latestAssistantState = this.getLatestAssistantTurnState(
+      history.map((chat) => ({
+        role: chat.role,
+        metadata: chat.metadata,
+      })),
+    );
 
     return {
       project: {
@@ -618,6 +636,7 @@ export class AiService {
         role: chat.role,
         message: sanitizeLegacyTeacherName(chat.content),
       })),
+      stage3Memory: latestAssistantState.stage3Memory ?? {},
     };
   }
 
@@ -666,6 +685,16 @@ export class AiService {
   ): Record<string, unknown> | null {
     const summaryKeys = [
       'discussionSummary',
+      'learningStyle',
+      'pedagogicalPreference',
+      'learningEnvironment',
+      'implementationDuration',
+      'facilitiesTechnologyUse',
+      'digitalUse',
+      'partnership',
+      'finalProjectForm',
+      'projectAssessment',
+      'stageCompletionSummary',
       'learningStrategy',
       'pedagogicalApproach',
       'facilityAndTechnologyUse',
